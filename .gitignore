@@ -8,3 +8,12 @@ __pycache__
 _logs
 *.pth
 paper_statistics
+*.pth
+#Cnn14_DecisionLevelMax_mAP=0.385.pth
+#Cnn14_mAP=0.431.pth
+*snd.mp3
+*.mp4
+GEMINI.md
+results
+Source
+pytorch/Archive/

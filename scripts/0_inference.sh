@@ -6,7 +6,7 @@ CHECKPOINT_PATH="Cnn14_mAP=0.431.pth"
 
 # Download audio tagging checkpoint.
 wget -O $CHECKPOINT_PATH "https://zenodo.org/record/3987831/files/Cnn14_mAP%3D0.431.pth?download=1"
-
+#File : Cnn14_mAP=0.431.pth
 # Inference.
 python3 pytorch/inference.py audio_tagging \
     --model_type=$MODEL_TYPE \
@@ -20,6 +20,8 @@ CHECKPOINT_PATH="Cnn14_DecisionLevelMax_mAP=0.385.pth"
 
 # Download sound event detection checkpoint.
 wget -O $CHECKPOINT_PATH "https://zenodo.org/record/3987831/files/Cnn14_DecisionLevelMax_mAP%3D0.385.pth?download=1"
+#File: Cnn14_DecisionLevelMax_mAP=0.385.pth
+
 
 # Inference.
 python3 pytorch/inference.py sound_event_detection \
