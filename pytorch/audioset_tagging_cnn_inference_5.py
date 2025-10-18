@@ -592,7 +592,7 @@ def sound_event_detection(args):
         print("🎧 Source is audio-only — the eventogram video is the final output.")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 5.0.3, with dynamic window rendering, see the original here: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print(f"Eventogrammer, version 5.0.4,  with dynamic window rendering. Notes: a file of duration of 30 mins requires 6GB RAM to process, with the time ratio: 1 original second : 10 seconds to process. An adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"")
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
