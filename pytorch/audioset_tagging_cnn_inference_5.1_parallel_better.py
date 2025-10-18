@@ -19,9 +19,8 @@ import moviepy
 import warnings
 import platform
 print(f"Using moviepy version: {moviepy.__version__}")
-from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
+from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip, ImageSequenceClip
 import json
-from scipy.stats import entropy
 
 import multiprocessing as mp
 
@@ -423,74 +422,6 @@ def sound_event_detection(args):
                     window_indexes = sorted_indexes[:top_k]
                 unique_windows[window_key] = (window_output, window_indexes)
 
-        def make_frame(t):
-            current_frame = int(t * frames_per_second)
-            start_frame = max(0, current_frame - half_window_frames)
-            end_frame = min(frames_num, current_frame + half_window_frames)
-            
-            # Adaptive window size (if enabled)
-            if args.use_adaptive_window:
-                kl_threshold = 0.5
-                for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
-                    if start_frame - offset >= 0:
-                        prev_prob = np.mean(framewise_output[start_frame - offset:start_frame], axis=0)
-                        curr_prob = np.mean(framewise_output[start_frame:start_frame + offset], axis=0)
-                        kl_div = compute_kl_divergence(prev_prob, curr_prob)
-                        if kl_div > kl_threshold:
-                            start_frame = max(0, start_frame - offset // 2)
-                            break
-                    if end_frame + offset < frames_num:
-                        curr_prob = np.mean(framewise_output[end_frame - offset:end_frame], axis=0)
-                        next_prob = np.mean(framewise_output[end_frame:end_frame + offset], axis=0)
-                        kl_div = compute_kl_divergence(curr_prob, next_prob)
-                        if kl_div > kl_threshold:
-                            end_frame = min(frames_num, end_frame + offset // 2)
-                            break
-            
-            window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
-            
-            # Create frame
-            fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
-            axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
-
-            # Spectrogram for window
-            stft_window = stft[:, start_frame:end_frame]
-            axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
-            axs[0].set_ylabel('Frequency bins', fontsize=14)
-            axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
-            print(f'Spectrogram and Eventogram (t={t:.1f}s)')
-            # Eventogram for window
-            axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
-            window_labels = np.array(labels)[window_indexes]
-            axs[1].yaxis.set_ticks(np.arange(0, top_k))
-            axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
-            axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-            axs[1].set_xlabel('Seconds', fontsize=14)
-            axs[1].xaxis.set_ticks_position('bottom')
-
-            # Adjust x-axis ticks for both plots
-            window_seconds = (end_frame - start_frame) / frames_per_second
-            tick_interval_window = max(1, int(window_seconds / 5))
-            x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
-            x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
-            
-            for ax in axs:
-                ax.xaxis.set_ticks(x_ticks_window)
-                ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
-                ax.set_xlim(0, end_frame - start_frame)
-
-            # Add marker
-            marker_x = current_frame - start_frame
-            for ax in axs:
-                ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
-
-            fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
-            plt.close(fig)
-            return img
-
         # Generate dynamic video
         print("DEBUG: Setting up parallel processing...")
         frame_times = np.arange(0, duration, 1/fps)
@@ -509,7 +440,7 @@ def sound_event_detection(args):
         g_half_window_frames = half_window_frames
         g_frames_num = frames_num
         #Half the threads for now:
-        with mp.Pool(processes=os.cpu_count()/2) as pool:
+        with mp.Pool(processes=os.cpu_count()//2) as pool:
             frames = pool.map(make_frame_parallel, frame_times)
 
         eventogram_clip = ImageSequenceClip(frames, fps=fps)
