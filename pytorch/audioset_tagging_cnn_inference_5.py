@@ -18,7 +18,7 @@ import shutil
 import moviepy
 import warnings
 import platform
-print(f"Using moviepy version: {moviepy.__version__}")
+
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
 from scipy.stats import entropy
@@ -657,9 +657,14 @@ def sound_event_detection(args):
                 print(f"\033[1;33mWarning: Failed to delete temporary CFR video {temp_video_path}: {e}\033[0m")
     else:
         print("🎧 Source is audio-only — the eventogram video is the final output.")
+    print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 5.0.5,  with dynamic window rendering. Notes: a file of duration of 30 mins requires 6GB RAM to process, with the time ratio: 1 original second : 10 seconds to process. An adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print(f"Eventogrammer, version 5.0.8")
+
+ 
+    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"Using moviepy version: {moviepy.__version__}")
     print(f"")
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
