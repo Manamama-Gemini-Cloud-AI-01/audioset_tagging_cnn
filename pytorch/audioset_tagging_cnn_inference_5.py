@@ -46,41 +46,105 @@ def is_video_file(audio_path):
     except Exception:
         return False
 
+
 def get_duration_and_fps(input_media_path):
+    """
+    Extract duration, FPS, and resolution from a media file using FFprobe.
+    Handles audio-only and video files universally, prioritizing format duration.
+    """
     try:
+        # Run ffprobe to get format and stream info
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-print_format', 'json', input_media_path],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True
         )
-        data = json.loads(result.stdout)
+        # Check if ffprobe returned valid JSON output
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            print(f"\033[1;31mError: Failed to parse FFprobe JSON output for {input_media_path}: {e}\033[0m")
+            data = {}
+
         streams = data.get('streams', [])
         format_info = data.get('format', {})
-        duration = float(format_info.get('duration', None)) if format_info.get('duration', None) else None
+        
+        # Initialize outputs
+        duration = None
         fps = None
         width = None
         height = None
 
+        # Try format duration first (most reliable)
+        if format_info.get('duration'):
+            try:
+                duration = float(format_info['duration'])
+            except (ValueError, TypeError):
+                print(f"\033[1;33mWarning: Invalid format duration in {input_media_path}\033[0m")
+
+        # Check video stream for duration, FPS, and resolution
         video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
         if video_stream:
+            if duration is None and video_stream.get('duration'):
+                try:
+                    duration = float(video_stream['duration'])
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid video stream duration in {input_media_path}\033[0m")
+            
             avg_frame_rate = video_stream.get('avg_frame_rate')
             if avg_frame_rate and '/' in avg_frame_rate:
-                num, den = map(int, avg_frame_rate.split('/'))
-                fps = num / den if den else None
-            width = int(video_stream.get('width')) if video_stream.get('width') else None
-            height = int(video_stream.get('height')) if video_stream.get('height') else None
+                try:
+                    num, den = map(int, avg_frame_rate.split('/'))
+                    fps = num / den if den else None
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid avg_frame_rate in {input_media_path}\033[0m")
+            
+            width = int(video_stream.get('width', 0)) if video_stream.get('width') else None
+            height = int(video_stream.get('height', 0)) if video_stream.get('height') else None
+            
+            if duration is None and video_stream.get('nb_frames') and fps:
+                try:
+                    duration = int(video_stream['nb_frames']) / fps
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid nb_frames or fps for duration calculation in {input_media_path}\033[0m")
 
-        if duration is None and video_stream:
-            nb_frames = video_stream.get('nb_frames')
-            if nb_frames and fps:
-                duration = int(nb_frames) / fps
-
+        # Check audio stream for duration (for audio-only files like WebM/Opus)
         if duration is None:
             audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
-            if audio_stream:
-                duration = float(audio_stream.get('duration', None))
+            if audio_stream and audio_stream.get('duration'):
+                try:
+                    duration = float(audio_stream['duration'])
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid audio stream duration in {input_media_path}\033[0m")
+            
+            # Check tags.DURATION for audio stream (e.g., WebM/Opus)
+            if duration is None and audio_stream and audio_stream.get('tags', {}).get('DURATION'):
+                try:
+                    # Parse tags.DURATION (format: "HH:MM:SS.mmmmmmmmm")
+                    duration_str = audio_stream['tags']['DURATION']
+                    h, m, s = duration_str.split(':')
+                    s, ms = s.split('.')
+                    duration = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000000000
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid tags.DURATION in {input_media_path}\033[0m")
 
+        # Fallback: Direct ffprobe duration probe
+        if duration is None:
+            try:
+                result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_media_path],
+                    capture_output=True, text=True
+                )
+                duration = float(result.stdout.strip())
+            except (subprocess.CalledProcessError, ValueError, TypeError) as e:
+                print(f"\033[1;33mWarning: Fallback duration probe failed for {input_media_path}: {e}\033[0m")
+
+        # If duration is still None, exit with error
+        if duration is None:
+            print(f"\033[1;31mError: Could not determine duration for {input_media_path}. Exiting.\033[0m")
+            return None, None, None, None
+
+        # Log results
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
-
         print(f"⏲  🗃️  Input file duration: \033[1;34m{duration_str}\033[0m")
         if fps:
             print(f"🮲  🗃️  Input video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
@@ -89,8 +153,11 @@ def get_duration_and_fps(input_media_path):
 
         return duration, fps, width, height
 
+    except subprocess.CalledProcessError as e:
+        print(f"\033[1;31mError: FFprobe failed for {input_media_path}: {e}\033[0m")
+        return None, None, None, None
     except Exception as e:
-        print(f"\033[1;31mFailed to parse video info: {e}\033[0m")
+        print(f"\033[1;31mError: Unexpected failure parsing {input_media_path}: {e}\033[0m")
         return None, None, None, None
 
 def compute_kl_divergence(p, q, eps=1e-10):
@@ -592,7 +659,7 @@ def sound_event_detection(args):
         print("🎧 Source is audio-only — the eventogram video is the final output.")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 5.0.4,  with dynamic window rendering. Notes: a file of duration of 30 mins requires 6GB RAM to process, with the time ratio: 1 original second : 10 seconds to process. An adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print(f"Eventogrammer, version 5.0.5,  with dynamic window rendering. Notes: a file of duration of 30 mins requires 6GB RAM to process, with the time ratio: 1 original second : 10 seconds to process. An adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"")
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
