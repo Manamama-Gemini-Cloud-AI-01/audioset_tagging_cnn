@@ -2,6 +2,22 @@
 # See: origin https://github.com/qiuqiangkong/audioset_tagging_cnn, heavily modified.
 # Uses two .py files that should be in the same folder for imports: pytorch_utils.py and models.py.
 
+# AI EXECUTION CONTEXT WARNING:
+# This script is designed to be run from the PROJECT ROOT directory
+# (the parent directory of this `pytorch` folder).
+#
+# MANDATORY ACTION: The Current Working Directory (CWD) MUST be the project root.
+# This is because imported modules (like `config.py`) use relative paths
+# (e.g., 'metadata/class_labels_indices.csv') that are resolved from the CWD.
+#
+# Correct execution example:
+# `cd /path/to/audioset_tagging_cnn/`
+# `python3 pytorch/audioset_tagging_cnn_inference_6.py /path/to/video.mp4 --checkpoint_path ...`
+#
+# Note: Paths provided as command-line arguments should be absolute to avoid ambiguity.
+
+
+
 import os
 import sys
 import numpy as np
@@ -9,6 +25,8 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+#Torch and torchaudio must be ==2.8 for now, avoid for a while: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
+
 import torch
 import torchaudio
 import csv
@@ -18,11 +36,10 @@ import shutil
 import moviepy
 import warnings
 import platform
-print(f"Using moviepy version: {moviepy.__version__}")
-from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip, ImageSequenceClip
-import json
 
-import multiprocessing as mp
+from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
+import json
+from scipy.stats import entropy
 
 # Suppress torchaudio deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -47,41 +64,105 @@ def is_video_file(audio_path):
     except Exception:
         return False
 
+
 def get_duration_and_fps(input_media_path):
+    """
+    Extract duration, FPS, and resolution from a media file using FFprobe.
+    Handles audio-only and video files universally, prioritizing format duration.
+    """
     try:
+        # Run ffprobe to get format and stream info
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-print_format', 'json', input_media_path],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True
         )
-        data = json.loads(result.stdout)
+        # Check if ffprobe returned valid JSON output
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            print(f"\033[1;31mError: Failed to parse FFprobe JSON output for {input_media_path}: {e}\033[0m")
+            data = {}
+
         streams = data.get('streams', [])
         format_info = data.get('format', {})
-        duration = float(format_info.get('duration', None)) if format_info.get('duration', None) else None
+        
+        # Initialize outputs
+        duration = None
         fps = None
         width = None
         height = None
 
+        # Try format duration first (most reliable)
+        if format_info.get('duration'):
+            try:
+                duration = float(format_info['duration'])
+            except (ValueError, TypeError):
+                print(f"\033[1;33mWarning: Invalid format duration in {input_media_path}\033[0m")
+
+        # Check video stream for duration, FPS, and resolution
         video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
         if video_stream:
+            if duration is None and video_stream.get('duration'):
+                try:
+                    duration = float(video_stream['duration'])
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid video stream duration in {input_media_path}\033[0m")
+            
             avg_frame_rate = video_stream.get('avg_frame_rate')
             if avg_frame_rate and '/' in avg_frame_rate:
-                num, den = map(int, avg_frame_rate.split('/'))
-                fps = num / den if den else None
-            width = int(video_stream.get('width')) if video_stream.get('width') else None
-            height = int(video_stream.get('height')) if video_stream.get('height') else None
+                try:
+                    num, den = map(int, avg_frame_rate.split('/'))
+                    fps = num / den if den else None
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid avg_frame_rate in {input_media_path}\033[0m")
+            
+            width = int(video_stream.get('width', 0)) if video_stream.get('width') else None
+            height = int(video_stream.get('height', 0)) if video_stream.get('height') else None
+            
+            if duration is None and video_stream.get('nb_frames') and fps:
+                try:
+                    duration = int(video_stream['nb_frames']) / fps
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid nb_frames or fps for duration calculation in {input_media_path}\033[0m")
 
-        if duration is None and video_stream:
-            nb_frames = video_stream.get('nb_frames')
-            if nb_frames and fps:
-                duration = int(nb_frames) / fps
-
+        # Check audio stream for duration (for audio-only files like WebM/Opus)
         if duration is None:
             audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
-            if audio_stream:
-                duration = float(audio_stream.get('duration', None))
+            if audio_stream and audio_stream.get('duration'):
+                try:
+                    duration = float(audio_stream['duration'])
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid audio stream duration in {input_media_path}\033[0m")
+            
+            # Check tags.DURATION for audio stream (e.g., WebM/Opus)
+            if duration is None and audio_stream and audio_stream.get('tags', {}).get('DURATION'):
+                try:
+                    # Parse tags.DURATION (format: "HH:MM:SS.mmmmmmmmm")
+                    duration_str = audio_stream['tags']['DURATION']
+                    h, m, s = duration_str.split(':')
+                    s, ms = s.split('.')
+                    duration = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000000000
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid tags.DURATION in {input_media_path}\033[0m")
 
+        # Fallback: Direct ffprobe duration probe
+        if duration is None:
+            try:
+                result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_media_path],
+                    capture_output=True, text=True
+                )
+                duration = float(result.stdout.strip())
+            except (subprocess.CalledProcessError, ValueError, TypeError) as e:
+                print(f"\033[1;33mWarning: Fallback duration probe failed for {input_media_path}: {e}\033[0m")
+
+        # If duration is still None, exit with error
+        if duration is None:
+            print(f"\033[1;31mError: Could not determine duration for {input_media_path}. Exiting.\033[0m")
+            return None, None, None, None
+
+        # Log results
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
-
         print(f"⏲  🗃️  Input file duration: \033[1;34m{duration_str}\033[0m")
         if fps:
             print(f"🮲  🗃️  Input video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
@@ -90,8 +171,11 @@ def get_duration_and_fps(input_media_path):
 
         return duration, fps, width, height
 
+    except subprocess.CalledProcessError as e:
+        print(f"\033[1;31mError: FFprobe failed for {input_media_path}: {e}\033[0m")
+        return None, None, None, None
     except Exception as e:
-        print(f"\033[1;31mFailed to parse video info: {e}\033[0m")
+        print(f"\033[1;31mError: Unexpected failure parsing {input_media_path}: {e}\033[0m")
         return None, None, None, None
 
 def compute_kl_divergence(p, q, eps=1e-10):
@@ -193,14 +277,17 @@ def sound_event_detection(args):
     labels = config.labels
     
     audio_dir = os.path.dirname(audio_path)
-    create_folder(audio_dir)
-    base_filename = get_filename(audio_path) + '_audioset_tagging_cnn'
-    fig_path = os.path.join(audio_dir, f'{base_filename}.png')
-    csv_path = os.path.join(audio_dir, f'{base_filename}.csv')
+    base_filename_for_dir = get_filename(audio_path)
+    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_audioset_tagging_cnn')
+    create_folder(output_dir)
+
+    base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
+    fig_path = os.path.join(output_dir, 'eventogram.png')
+    csv_path = os.path.join(output_dir, 'full_event_log.csv')
     if args.dynamic_eventogram:
-        output_video_path = os.path.join(audio_dir, f'{base_filename}_eventogram_dynamic.mp4')
+        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_dynamic.mp4')
     else:
-        output_video_path = os.path.join(audio_dir, f'{base_filename}_eventogram.mp4')
+        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram.mp4')
     
     disk_usage = shutil.disk_usage(audio_dir)
     if disk_usage.free < 1e9:
@@ -422,28 +509,76 @@ def sound_event_detection(args):
                     window_indexes = sorted_indexes[:top_k]
                 unique_windows[window_key] = (window_output, window_indexes)
 
-        # Generate dynamic video
-        print("DEBUG: Setting up parallel processing...")
-        frame_times = np.arange(0, duration, 1/fps)
-        
-        # Make large arrays global for copy-on-write memory sharing
-        global g_framewise_output, g_stft, g_labels, g_fig_width_px, g_fig_height_px, g_dpi, g_left_frac, g_frames_per_second, g_top_k, g_half_window_frames, g_frames_num
-        g_framewise_output = framewise_output
-        g_stft = stft
-        g_labels = labels
-        g_fig_width_px = fig_width_px
-        g_fig_height_px = fig_height_px
-        g_dpi = dpi
-        g_left_frac = left_frac
-        g_frames_per_second = frames_per_second
-        g_top_k = top_k
-        g_half_window_frames = half_window_frames
-        g_frames_num = frames_num
-        #Half the threads for now:
-        with mp.Pool(processes=os.cpu_count()//2) as pool:
-            frames = pool.map(make_frame_parallel, frame_times)
+        def make_frame(t):
+            current_frame = int(t * frames_per_second)
+            start_frame = max(0, current_frame - half_window_frames)
+            end_frame = min(frames_num, current_frame + half_window_frames)
+            
+            # Adaptive window size (if enabled)
+            if args.use_adaptive_window:
+                kl_threshold = 0.5
+                for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
+                    if start_frame - offset >= 0:
+                        prev_prob = np.mean(framewise_output[start_frame - offset:start_frame], axis=0)
+                        curr_prob = np.mean(framewise_output[start_frame:start_frame + offset], axis=0)
+                        kl_div = compute_kl_divergence(prev_prob, curr_prob)
+                        if kl_div > kl_threshold:
+                            start_frame = max(0, start_frame - offset // 2)
+                            break
+                    if end_frame + offset < frames_num:
+                        curr_prob = np.mean(framewise_output[end_frame - offset:end_frame], axis=0)
+                        next_prob = np.mean(framewise_output[end_frame:end_frame + offset], axis=0)
+                        kl_div = compute_kl_divergence(curr_prob, next_prob)
+                        if kl_div > kl_threshold:
+                            end_frame = min(frames_num, end_frame + offset // 2)
+                            break
+            
+            window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
+            
+            # Create frame
+            fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
+            gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+            axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
 
-        eventogram_clip = ImageSequenceClip(frames, fps=fps)
+            # Spectrogram for window
+            stft_window = stft[:, start_frame:end_frame]
+            axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
+            axs[0].set_ylabel('Frequency bins', fontsize=14)
+            axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
+            print(f'; (t={t:.1f}s)')
+            # Eventogram for window
+            axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+            window_labels = np.array(labels)[window_indexes]
+            axs[1].yaxis.set_ticks(np.arange(0, top_k))
+            axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
+            axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+            axs[1].set_xlabel('Seconds', fontsize=14)
+            axs[1].xaxis.set_ticks_position('bottom')
+
+            # Adjust x-axis ticks for both plots
+            window_seconds = (end_frame - start_frame) / frames_per_second
+            tick_interval_window = max(1, int(window_seconds / 5))
+            x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
+            x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
+            
+            for ax in axs:
+                ax.xaxis.set_ticks(x_ticks_window)
+                ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
+                ax.set_xlim(0, end_frame - start_frame)
+
+            # Add marker
+            marker_x = current_frame - start_frame
+            for ax in axs:
+                ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
+
+            fig.canvas.draw()
+            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
+            plt.close(fig)
+            return img
+
+        # Generate dynamic video
+        eventogram_clip = VideoClip(make_frame, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
         eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
         eventogram_with_audio_clip.fps = fps
@@ -544,68 +679,90 @@ def sound_event_detection(args):
     else:
         print("🎧 Source is audio-only — the eventogram video is the final output.")
 
-def make_frame_parallel(t):
-    # Access global variables
-    global g_framewise_output, g_stft, g_labels, g_fig_width_px, g_fig_height_px, g_dpi, g_left_frac, g_frames_per_second, g_top_k, g_half_window_frames, g_frames_num
+    # --- AI-Friendly Summary Generation (Event Block Detection) ---
+    print("📊  Generating AI-friendly event summary files…")
 
-    current_frame = int(t * g_frames_per_second)
+    # 1. Generate summary_events.csv
+    summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     
-    # Calculate window boundaries
-    start_frame = max(0, current_frame - g_half_window_frames)
-    end_frame = min(g_frames_num, current_frame + g_half_window_frames)
+    onset_threshold = 0.20  # Probability to start an event
+    offset_threshold = 0.15 # Probability to end an event
+    min_event_duration_seconds = 0.5 # Minimum duration to be considered a valid event
 
-    # Adjust for edges
-    if current_frame < g_half_window_frames:
-        end_frame = min(g_half_window_frames * 2, g_frames_num)
-    if current_frame > g_frames_num - g_half_window_frames:
-        start_frame = max(0, g_frames_num - g_half_window_frames * 2)
+    detected_events = []
 
-    window_output, window_indexes = get_dynamic_top_events(g_framewise_output, start_frame, end_frame, g_top_k)
+    # Find event blocks for each sound class
+    for i, label in enumerate(labels):
+        in_event = False
+        event_start_frame = 0
+        
+        for frame_index, prob in enumerate(framewise_output[:, i]):
+            if not in_event and prob > onset_threshold:
+                in_event = True
+                event_start_frame = frame_index
+            elif in_event and prob < offset_threshold:
+                in_event = False
+                event_end_frame = frame_index
+                
+                duration_frames = event_end_frame - event_start_frame
+                duration_seconds = duration_frames / frames_per_second
+                
+                if duration_seconds >= min_event_duration_seconds:
+                    event_block_probs = framewise_output[event_start_frame:event_end_frame, i]
+                    
+                    detected_events.append({
+                        'sound_class': label,
+                        'start_time_seconds': round(event_start_frame / frames_per_second, 3),
+                        'end_time_seconds': round(event_end_frame / frames_per_second, 3),
+                        'duration_seconds': round(duration_seconds, 3),
+                        'peak_probability': float(np.max(event_block_probs)),
+                        'average_probability': float(np.mean(event_block_probs))
+                    })
+
+    # Sort events by a score combining duration and average probability, then by start time
+    detected_events.sort(key=lambda x: (x['duration_seconds'] * x['average_probability']), reverse=True)
     
-    # Create frame
-    fig = plt.figure(figsize=(g_fig_width_px / g_dpi, g_fig_height_px / g_dpi), dpi=g_dpi)
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=g_left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
-    axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
+    # Keep the top 40 most prominent events and then sort them chronologically
+    top_events = sorted(detected_events[:40], key=lambda x: x['start_time_seconds'])
 
-    # Spectrogram for window
-    stft_window = g_stft[:, start_frame:end_frame]
-    axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
-    axs[0].set_ylabel('Frequency bins', fontsize=14)
-    axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
+    with open(summary_csv_path, 'w', newline='') as csvfile:
+        fieldnames = ['sound_class', 'start_time_seconds', 'end_time_seconds', 'duration_seconds', 'peak_probability', 'average_probability']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(top_events)
+    print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
-    # Eventogram for window
-    axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
-    window_labels = np.array(g_labels)[window_indexes]
-    axs[1].yaxis.set_ticks(np.arange(0, g_top_k))
-    axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
-    axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-    axs[1].set_xlabel('Seconds', fontsize=14)
-    axs[1].xaxis.set_ticks_position('bottom')
-
-    # Adjust x-axis ticks for both plots
-    window_seconds = (end_frame - start_frame) / g_frames_per_second
-    tick_interval_window = max(1, int(window_seconds / 5))
-    x_ticks_window = np.arange(0, end_frame - start_frame + 1, g_frames_per_second * tick_interval_window)
-    x_labels_window = np.arange(int(start_frame / g_frames_per_second), int(end_frame / g_frames_per_second) + 1, tick_interval_window)
+    # 2. Generate summary_manifest.json
+    manifest_path = os.path.join(output_dir, 'summary_manifest.json')
+    final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
     
-    for ax in axs:
-        ax.xaxis.set_ticks(x_ticks_window)
-        ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
-        ax.set_xlim(0, end_frame - start_frame)
+    artifacts = {
+        'source_file': os.path.basename(audio_path),
+        'analysis_type': 'Audio Event Detection with PANNs',
+        'artifacts': {
+            'summary_events.csv': 'A summary of the most prominent, continuous sound events, detailing their start, end, duration, and intensity.',
+            'eventogram.png': 'Visualization of the top 10 sound events over time.',
+            'full_event_log.csv': 'Full, detailed log of sound event probabilities for each time frame.',
+            os.path.basename(output_video_path): 'Video of the eventogram with original audio.',
+        }
+    }
+    if os.path.exists(final_overlay_path):
+        artifacts['artifacts'][os.path.basename(final_overlay_path)] = 'Original video overlaid with the eventogram visualization.'
 
-    # Add marker
-    marker_x = current_frame - start_frame
-    for ax in axs:
-        ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
-
-    fig.canvas.draw()
-    img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-    img = img.reshape((g_fig_height_px, g_fig_width_px, 4))[:, :, :3]  # Drop alpha channel
-    plt.close(fig)
-    return img
+    with open(manifest_path, 'w') as f:
+        json.dump(artifacts, f, indent=4)
+    print(f'Saved manifest JSON to: \033[1;34m{manifest_path}\033[1;0m')
+    
+    print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 5.1.3, with parallel processing, dynamic window rendering, see the original here: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print(f"Eventogrammer, version 5.0.9")
+
+ 
+    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"Using moviepy version: {moviepy.__version__}")
+    print(f"Using torchaudio version (better be pinned at2.8.0 for a while...): {torchaudio.__version__}")
+
     print(f"")
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
