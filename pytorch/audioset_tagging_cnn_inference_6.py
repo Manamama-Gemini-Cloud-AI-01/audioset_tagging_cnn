@@ -338,8 +338,17 @@ def sound_event_detection(args):
                     print("\033[1;33mDetected VFR video (r_frame_rate={r_fps:.3f}, avg_frame_rate={avg_fps:.3f}). Re-encoding to CFR.\033[0m")
                     temp_video_path = os.path.join(audio_dir, f'temp_cfr_{get_filename(audio_path)}.mp4')
                     try:
+                        target_fps = video_fps
+                        if not target_fps or target_fps <= 0:
+                            if r_fps > 0:
+                                target_fps = r_fps
+                                print(f"\033[1;33mWarning: avg_frame_rate is invalid, falling back to r_frame_rate: {target_fps:.3f}\033[0m")
+                            else:
+                                target_fps = 30
+                                print(f"\033[1;33mWarning: Both avg_frame_rate and r_frame_rate are invalid, falling back to default FPS: {target_fps}\033[0m")
+                        
                         subprocess.run([
-                            'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(video_fps), '-fps_mode', 'cfr', '-c:a', 'copy', temp_video_path, '-y'
+                            'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'copy', temp_video_path, '-y'
                         ], check=True)
                         video_input_path = temp_video_path
                         print(f"Re-encoded to: \033[1;34m{temp_video_path}\033[1;0m")
