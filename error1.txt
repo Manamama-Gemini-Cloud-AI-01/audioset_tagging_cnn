@@ -1,0 +1,41 @@
+zezen@above-hp2-silver:~/Downloads/GitHub/audioset_tagging_cnn$ time python3 /home/zezen/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py --model_type Cnn14_DecisionLevelMax --checkpoint_path /home/zezen/Downloads/GitHub/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth --dynamic_eventogram "/home/zezen/Videos/Videos_on_P7/Watch_me/SRT/Dolinska_AboveTrans_Eventogram_Demo_2025-10-27T13_14_56.783Z.webm"
+Eventogrammer, version 5.0.9
+Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.
+Using moviepy version: 2.1.2
+Using torchaudio version (better be pinned at2.8.0 for a while...): 2.8.0+cpu
+
+Using device: cpu
+Using CPU.
+⏲  🗃️  Input file duration: 0:01:25
+📽  🗃️  Input video resolution: 1600x704
+Detected VFR video (r_frame_rate={r_fps:.3f}, avg_frame_rate={avg_fps:.3f}). Re-encoding to CFR.
+[vost#0:0/libx264 @ 0x62ed18bd7c80] Invalid framerate value: None
+Error opening output file /home/zezen/Videos/Videos_on_P7/Watch_me/SRT/temp_cfr_Dolinska_AboveTrans_Eventogram_Demo_2025-10-27T13_14_56.783Z.mp4.
+Error opening output files: Invalid argument
+Error during VFR-to-CFR conversion: Command '['ffmpeg', '-loglevel', 'warning', '-i', '/home/zezen/Videos/Videos_on_P7/Watch_me/SRT/Dolinska_AboveTrans_Eventogram_Demo_2025-10-27T13_14_56.783Z.webm', '-r', 'None', '-fps_mode', 'cfr', '-c:a', 'copy', '/home/zezen/Videos/Videos_on_P7/Watch_me/SRT/temp_cfr_Dolinska_AboveTrans_Eventogram_Demo_2025-10-27T13_14_56.783Z.mp4', '-y']' returned non-zero exit status 234.
+	Command being timed: "python3 /home/zezen/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py --model_type Cnn14_DecisionLevelMax --checkpoint_path /home/zezen/Downloads/GitHub/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth --dynamic_eventogram /home/zezen/Videos/Videos_on_P7/Watch_me/SRT/Dolinska_AboveTrans_Eventogram_Demo_2025-10-27T13_14_56.783Z.webm"
+	User time (seconds): 22.84
+	System time (seconds): 5.25
+	Percent of CPU this job got: 83%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:33.67
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1264976
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 3484
+	Minor (reclaiming a frame) page faults: 269119
+	Voluntary context switches: 10952
+	Involuntary context switches: 59022
+	Swaps: 0
+	File system inputs: 1833624
+	File system outputs: 96
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+zezen@above-hp2-silver:~/Downloads/GitHub/audioset_tagging_cnn$ 
+zezen@above-hp2-silver:~/Downloads/GitHub/audioset_tagging_cnn$ 
+
