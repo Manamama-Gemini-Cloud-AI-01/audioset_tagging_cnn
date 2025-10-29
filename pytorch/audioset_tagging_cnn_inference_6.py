@@ -31,6 +31,7 @@ import torch
 import torchaudio
 import csv
 import datetime
+import time
 import subprocess
 import shutil
 import moviepy
@@ -168,6 +169,16 @@ def get_duration_and_fps(input_media_path):
             print(f"🮲  🗃️  Input video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
         if width and height:
             print(f"📽  🗃️  Input video resolution: \033[1;34m{width}x{height}\033[0m")
+            if height > width:
+                print("\n\033[1;33m--- WARNING: Portrait Video Detected ---\033[0m")
+                print("\nProcessing a portrait video may result in a narrow or distorted overlay.")
+                print("For best results, it is recommended to rotate the video to landscape before processing.")
+                print("\nYou can use the following ffmpeg command to rotate the video:\n")
+                print(f"\033[1;32mffmpeg -i \"{input_media_path}\" -vf \"transpose=1\" \"{os.path.splitext(input_media_path)[0]}_rotated.mp4\"\033[0m\n")
+                print("To do so, break the script now (Ctrl+C) and run the command above.")
+                print("Otherwise, we are proceeding with the portrait video in 2 seconds...")
+                time.sleep(2) # Add a 2-second delay
+                print("\033[1;33m------------------------------------------\033[0m\n")
 
         return duration, fps, width, height
 
