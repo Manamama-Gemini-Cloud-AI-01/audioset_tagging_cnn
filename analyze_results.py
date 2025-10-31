@@ -10,21 +10,19 @@ CSV_FILE = "/media/zezen/TOSH-P2_Data_Public/Temp_to_analyze/Street_sounds_archi
 # The file containing the AudioSet class labels and indices
 CLASS_LABELS_FILE = "/home/zezen/Downloads/GitHub/audioset_tagging_cnn/metadata/class_labels_indices.csv"
 
-# Mapping from UrbanSound8K class names to the most relevant AudioSet display name
-# This is based on the documentation and analysis of the AudioSet ontology.
+# Flexible mapping from UrbanSound8K class names to a list of acceptable AudioSet display names
 US8K_TO_AUDIOSET_MAP = {
-    'air_conditioner': 'Air conditioning',
-    'car_horn': 'Vehicle horn, car horn, honking',
-    'children_playing': 'Child speech, kid speaking',
-    'dog_bark': 'Bark',
-    'drilling': 'Drill',
-    'engine_idling': 'Idling',
-    'gun_shot': 'Gunshot, gunfire',
-    'jackhammer': 'Jackhammer',
-    'siren': 'Siren',
-    'street_music': 'Music'
+    'air_conditioner': ['Air conditioning'],
+    'car_horn': ['Vehicle horn, car horn, honking', 'Toot', 'Car alarm'],
+    'children_playing': ['Child speech, kid speaking', 'Children playing', 'Speech', 'Laughter', 'Giggle', 'Run'],
+    'dog_bark': ['Bark', 'Dog', 'Bow-wow', 'Growling', 'Howl', 'Yip', 'Whimper (dog)'],
+    'drilling': ['Drill', 'Dental drill, dentist\'s drill', 'Tools'],
+    'engine_idling': ['Idling', 'Engine', 'Light engine (high frequency)', 'Medium engine (mid frequency)', 'Heavy engine (low frequency)'],
+    'gun_shot': ['Gunshot, gunfire', 'Machine gun', 'Fusillade', 'Cap gun'],
+    'jackhammer': ['Jackhammer'],
+    'siren': ['Siren', 'Emergency vehicle', 'Police car (siren)', 'Ambulance (siren)', 'Fire engine, fire truck (siren)', 'Civil defense siren'],
+    'street_music': ['Music', 'Street music', 'Busking', 'Accordion', 'Singing', 'Plucked string instrument', 'Violin, fiddle']
 }
-
 
 def analyze_results():
     """
@@ -61,7 +59,7 @@ def analyze_results():
     correct_predictions = 0
     total_processed = 0
 
-    print("Analyzing results...")
+    print("Analyzing results with flexible mapping...")
 
     # Iterate over the rows of the master DataFrame
     for index, row in master_df.iterrows():
@@ -94,16 +92,16 @@ def analyze_results():
         top_prediction_row = summary_df.loc[summary_df['average_probability'].idxmax()]
         predicted_class_name = top_prediction_row['sound_class']
 
-        # Get the expected AudioSet class name for the true UrbanSound8K class
-        expected_audioset_class = US8K_TO_AUDIOSET_MAP.get(true_class_name)
+        # Get the list of acceptable AudioSet class names for the true UrbanSound8K class
+        acceptable_predictions = US8K_TO_AUDIOSET_MAP.get(true_class_name, [])
 
         y_true.append(true_class_name)
         y_pred.append(predicted_class_name) # For confusion matrix, we can use the direct predicted name
 
         # Check for a correct prediction
-        if expected_audioset_class and expected_audioset_class == predicted_class_name:
+        if predicted_class_name in acceptable_predictions:
             correct_predictions += 1
-            print(f"✅ Correct: {row['slice_file_name']} - Predicted: '{predicted_class_name}'")
+            print(f"✅ Correct: {row['slice_file_name']} - True: '{true_class_name}', Predicted: '{predicted_class_name}' (Accepted)")
         else:
             print(f"❌ Incorrect: {row['slice_file_name']} - True: '{true_class_name}', Predicted: '{predicted_class_name}'")
 
@@ -115,17 +113,24 @@ def analyze_results():
     accuracy = (correct_predictions / total_processed) * 100
     print(f"\n--- Analysis Complete ---")
     print(f"Total Files Analyzed: {total_processed}")
-    print(f"Correct Predictions: {correct_predictions}")
-    print(f"Accuracy: {accuracy:.2f}%")
+    print(f"Correct Predictions (Flexible): {correct_predictions}")
+    print(f"Accuracy (Flexible): {accuracy:.2f}%")
 
     # --- Confusion Matrix ---
-    print("\nGenerating confusion matrix...")
+    print("\nGenerating and exporting confusion matrix...")
     
     # Get all unique labels from both true and predicted lists
     labels = sorted(list(set(y_true) | set(y_pred)))
     
     cm = confusion_matrix(y_true, y_pred, labels=labels)
     
+    # Export the confusion matrix to a CSV file
+    cm_df = pd.DataFrame(cm, index=labels, columns=labels)
+    confusion_matrix_csv_path = os.path.join(os.path.dirname(CSV_FILE), 'confusion_matrix.csv')
+    cm_df.to_csv(confusion_matrix_csv_path)
+    print(f"Confusion matrix data saved to: {confusion_matrix_csv_path}")
+
+    # Display and save the confusion matrix image
     fig, ax = plt.subplots(figsize=(12, 12))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
     disp.plot(ax=ax, xticks_rotation='vertical', cmap='Blues')
@@ -133,12 +138,11 @@ def analyze_results():
     plt.title('Confusion Matrix')
     plt.tight_layout()
     
-    confusion_matrix_path = os.path.join(os.path.dirname(CSV_FILE), 'confusion_matrix.png')
-    plt.savefig(confusion_matrix_path)
+    confusion_matrix_png_path = os.path.join(os.path.dirname(CSV_FILE), 'confusion_matrix.png')
+    plt.savefig(confusion_matrix_png_path)
     
-    print(f"Confusion matrix saved to: {confusion_matrix_path}")
-    print("Note: The confusion matrix shows the direct predicted AudioSet labels against the true UrbanSound8K labels.")
-
+    print(f"Confusion matrix image saved to: {confusion_matrix_png_path}")
 
 if __name__ == "__main__":
     analyze_results()
+
