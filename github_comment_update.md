@@ -1,3 +1,11 @@
+Re: https://github.com/miso-belica/sumy/issues/204#issuecomment-3461463939 - the
+idea is good and it works, but the details of the patch were initially wrong. I have now
+corrected the script to be robust, prevent duplicate entries, and successfully integrate
+Polish language support into `sumy`.
+
+Here is the final, working `apply_sumy_polish_fix.sh` script:
+
+```bash
 #!/bin/bash
 
 # This script applies a patch to the sumy library to add Polish language support.
