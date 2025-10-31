@@ -292,6 +292,12 @@ def sound_event_detection(args):
     output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_audioset_tagging_cnn')
     create_folder(output_dir)
 
+    # --- Idempotency Check ---
+    manifest_path = os.path.join(output_dir, 'summary_manifest.json')
+    if os.path.exists(manifest_path):
+        print(f"✅ Skipping {audio_path} - summary_manifest.json already exists.")
+        return
+
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
@@ -776,7 +782,7 @@ def sound_event_detection(args):
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 5.0.9")
+    print(f"Eventogrammer, version 5.0.10, changed: idempotency")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
