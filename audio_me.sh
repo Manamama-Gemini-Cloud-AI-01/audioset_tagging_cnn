@@ -1,1 +1,1 @@
-time python3 pytorch/audioset_tagging_cnn_inference_6.py /data/data/com.termux/files/home/Downloads/GitHub/audioset_tagging_cnn/It_is_realme.wav --model_type=Cnn14_DecisionLevelMax --checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth --dynamic_eventogram --sample_rate=32000 --window_size=1024 --hop_size=320 --mel_bins=64 --fmin=50 --fmax=14000
+time python3 pytorch/audioset_tagging_cnn_inference_6.py  --model_type=Cnn14_DecisionLevelMax --checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth --dynamic_eventogram $@
