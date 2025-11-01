@@ -663,7 +663,7 @@ def sound_event_detection(args):
         main_input, overlay_input = audio_path, output_video_path
 
         overlay_cmd = [
-            "time", "-v",
+           
             "ffmpeg", "-y",
             "-i", main_input,
             "-i", overlay_input,
