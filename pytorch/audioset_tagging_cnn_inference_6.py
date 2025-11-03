@@ -786,7 +786,7 @@ if __name__ == '__main__':
     print(f"Eventogrammer, version 6.0.11, changed: idempotency")
 
  
-    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version (better be pinned at version 2.8.0 for a while...): {torchaudio.__version__}")
 
