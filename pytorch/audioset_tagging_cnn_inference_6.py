@@ -325,9 +325,46 @@ def sound_event_detection(args):
         return
 
     duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
-    if duration is None:
-        print("\033[1;31mError: Could not determine audio duration. Exiting.\033[0m")
-        return
+    
+    # Check if duration is problematic (None or 0)
+    if duration is None or duration == 0:
+        print(f"\033[1;33mWarning: Initial duration detection for {audio_path} returned {duration}. Attempting conversion to MP3.\033[0m")
+        original_path_for_conversion = audio_path # Keep original path for ffmpeg input
+        audio_dir = os.path.dirname(original_path_for_conversion)
+        base_filename = get_filename(original_path_for_conversion)
+        
+        # New MP3 path
+        mp3_path = os.path.join(audio_dir, f"{base_filename}_converted.mp3")
+
+        try:
+            print(f"\033[1;36mConverting {original_path_for_conversion} to {mp3_path} using ffmpeg...\033[0m")
+            subprocess.run(
+                ['ffmpeg', '-i', original_path_for_conversion, '-y', mp3_path],
+                check=True, capture_output=True, text=True
+            )
+            print(f"\033[1;32mSuccessfully converted to {mp3_path}. Re-probing duration from the new MP3.\033[0m")
+            
+            # Update audio_path to point to the newly converted MP3 for all subsequent operations
+            audio_path = mp3_path
+            
+            # Re-run duration detection on the converted file
+            duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
+            
+            if duration is None or duration == 0:
+                print(f"\033[1;31mError: Could not determine duration for {audio_path}, even after conversion. Exiting.\033[0m")
+                return
+            else:
+                print(f"\033[1;32mConversion successful, new duration detected: {duration} seconds.\033[0m")
+
+        except subprocess.CalledProcessError as e:
+            print(f"\033[1;31mError: FFmpeg conversion failed for {original_path_for_conversion}. Stderr: {e.stderr}\033[0m")
+            return
+        except Exception as e:
+            print(f"\033[1;31mAn unexpected error occurred during conversion: {e}\033[0m")
+            return
+
+    # If we reach here, 'duration' is valid (either initially or after successful conversion).
+    # Proceed with the rest of the script.
     is_video = is_video_file(audio_path)
     
     if is_video and (video_width is None or video_height is None):
