@@ -403,7 +403,7 @@ def sound_event_detection(args):
                                 print(f"\033[1;33mWarning: Both avg_frame_rate and r_frame_rate are invalid, falling back to default FPS: {target_fps}\033[0m")
                         
                         subprocess.run([
-                            'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
+                            'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'copy', temp_video_path, '-y'
                         ], check=True)
                         video_input_path = temp_video_path
                         print(f"Re-encoded to: \033[1;34m{temp_video_path}\033[1;0m")
@@ -722,7 +722,9 @@ def sound_event_detection(args):
         else:
             overlay_cmd.extend(["-crf", str(args.crf)])
         overlay_cmd.extend([
-            "-c:a", "aac",
+            "-c:a", "copy",
+            #experimental, but widely used: copy opus etc. to mp4
+             "-strict", "-2",
             "-shortest",
             final_output_path
         ])
