@@ -1,0 +1,64 @@
+Command: 
+
+python pytorch/audioset_tagging_cnn_inference_6.py --model_type=Cnn14_DecisionLevelMax --checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth   --dynamic_eventogram /media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A.webm
+
+
+
+fails at the end of the transcription stage , with: 
+
+
+frame_index: 100%|█████████████████████████▉| 11937/11964 [1:32:58<00:10,  2.65it/s, now=None]; (t=497.8s)
+frame_index: 100%|█████████████████████████▉| 11938/11964 [1:32:59<00:09,  2.69it/s, now=None]; (t=497.9s)
+frame_index: 100%|█████████████████████████▉| 11939/11964 [1:32:59<00:08,  2.82it/s, now=None]; (t=497.9s)
+frame_index: 100%|█████████████████████████▉| 11940/11964 [1:32:59<00:08,  2.84it/s, now=None]; (t=498.0s)
+frame_index: 100%|█████████████████████████▉| 11941/11964 [1:33:00<00:08,  2.77it/s, now=None]; (t=498.0s)
+frame_index: 100%|█████████████████████████▉| 11942/11964 [1:33:00<00:08,  2.70it/s, now=None]; (t=498.0s)
+frame_index: 100%|█████████████████████████▉| 11943/11964 [1:33:00<00:07,  2.66it/s, now=None]; (t=498.1s)
+frame_index: 100%|█████████████████████████▉| 11944/11964 [1:33:01<00:09,  2.08it/s, now=None]; (t=498.1s)
+frame_index: 100%|█████████████████████████▉| 11945/11964 [1:33:01<00:08,  2.22it/s, now=None]; (t=498.2s)
+frame_index: 100%|█████████████████████████▉| 11946/11964 [1:33:02<00:07,  2.31it/s, now=None]; (t=498.2s)
+frame_index: 100%|█████████████████████████▉| 11947/11964 [1:33:02<00:06,  2.45it/s, now=None]; (t=498.2s)
+frame_index: 100%|█████████████████████████▉| 11948/11964 [1:33:03<00:06,  2.48it/s, now=None]; (t=498.3s)
+frame_index: 100%|█████████████████████████▉| 11949/11964 [1:33:03<00:06,  2.47it/s, now=None]; (t=498.3s)
+frame_index: 100%|█████████████████████████▉| 11950/11964 [1:33:03<00:05,  2.53it/s, now=None]; (t=498.4s)
+frame_index: 100%|█████████████████████████▉| 11951/11964 [1:33:04<00:05,  2.58it/s, now=None]; (t=498.4s)
+frame_index: 100%|█████████████████████████▉| 11952/11964 [1:33:04<00:04,  2.62it/s, now=None]; (t=498.5s)
+frame_index: 100%|█████████████████████████▉| 11953/11964 [1:33:04<00:04,  2.69it/s, now=None]; (t=498.5s)
+frame_index: 100%|█████████████████████████▉| 11954/11964 [1:33:05<00:03,  2.62it/s, now=None]; (t=498.5s)
+frame_index: 100%|█████████████████████████▉| 11955/11964 [1:33:05<00:03,  2.67it/s, now=None]; (t=498.6s)
+frame_index: 100%|█████████████████████████▉| 11956/11964 [1:33:06<00:03,  2.66it/s, now=None]; (t=498.6s)
+frame_index: 100%|█████████████████████████▉| 11957/11964 [1:33:06<00:02,  2.52it/s, now=None]; (t=498.7s)
+frame_index: 100%|█████████████████████████▉| 11958/11964 [1:33:06<00:02,  2.59it/s, now=None]; (t=498.7s)
+frame_index: 100%|█████████████████████████▉| 11959/11964 [1:33:07<00:01,  2.69it/s, now=None]; (t=498.7s)
+frame_index: 100%|█████████████████████████▉| 11960/11964 [1:33:08<00:01,  2.09it/s, now=None]; (t=498.8s)
+frame_index: 100%|█████████████████████████▉| 11961/11964 [1:33:08<00:01,  2.23it/s, now=None]; (t=498.8s)
+frame_index: 100%|█████████████████████████▉| 11962/11964 [1:33:08<00:00,  2.38it/s, now=None]; (t=498.9s)
+frame_index: 100%|█████████████████████████▉| 11963/11964 [1:33:08<00:00,  2.74it/s, now=None]; (t=498.9s)
+frame_index: 100%|██████████████████████████| 11964/11964 [1:33:09<00:00,  2.77it/s, now=None]; (t=499.0s)
+MoviePy - Done !                                                                              
+MoviePy - video ready /media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A_audioset_tagging_cnn/Cops_Make_the_Worst_A_audioset_tagging_cnn_eventogram_dynamic.mp4
+🎹 Saved the dynamic eventogram video to: /media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A_audioset_tagging_cnn/Cops_Make_the_Worst_A_audioset_tagging_cnn_eventogram_dynamic.mp4
+🎬  Overlaying source media with the eventogram…
+🎬  Source resolution:
+⏲  🗃️  Input file duration: 0:08:19
+🮲  🗃️  Input video FPS (avg): 23.976
+📽  🗃️  Input video resolution: 1280x720
+💁  Overlay resolution:
+⏲  🗃️  Input file duration: 0:08:19
+🮲  🗃️  Input video FPS (avg): 23.980
+📽  🗃️  Input video resolution: 1280x480
+🎯 Target resolution: 1280x720
+[mp4 @ 0x55eb57ee9400] track 1: codec frame size is not set
+[mp4 @ 0x55eb57ee9400] opus in MP4 support is experimental, add '-strict -2' if you want to use it.
+Could not write header for output file #0 (incorrect codec parameters ?): Experimental feature
+Error initializing output stream 0:0 -- 
+Error during FFmpeg overlay: Command '['ffmpeg', '-y', '-i', '/media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A.webm', '-i', '/media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A_audioset_tagging_cnn/Cops_Make_the_Worst_A_audioset_tagging_cnn_eventogram_dynamic.mp4', '-loglevel', 'warning', '-filter_complex', '[0:v]scale=1280:720[main];[1:v]scale=1280:144[ovr];[ovr]format=rgba,colorchannelmixer=aa=0.7[ovr_t];[main][ovr_t]overlay=x=0:y=H-h[v]', '-map', '[v]', '-map', '0:a?', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '23', '-c:a', 'copy', '-shortest', '/media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A_audioset_tagging_cnn/Cops_Make_the_Worst_A_audioset_tagging_cnn_eventogram_dynamic_overlay.mp4']' returned non-zero exit status 1.
+zezen@zezen-HP-Pavilion-x360-Convertible:~/Downloads/GitHub/audioset_tagging_cnn$ 
+
+
+
+
+See: 
+/media/zezen/TOSH-P2_Data_Public/Video/whisper_srt/Cops_Make_the_Worst_A_audioset_tagging_cnn
+for the partial results
+
