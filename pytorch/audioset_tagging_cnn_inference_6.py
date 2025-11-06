@@ -293,6 +293,21 @@ def sound_event_detection(args):
     output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_audioset_tagging_cnn')
     create_folder(output_dir)
 
+    # --- Copy AI analysis guide ---
+    try:
+        # Using a relative path from the script's location
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'audioset_analysis_guide.md'))
+        guide_dest_path = os.path.join(output_dir, 'audioset_analysis_guide.md')
+        
+        if os.path.exists(guide_src_path):
+            shutil.copy(guide_src_path, guide_dest_path)
+            print(f'Copied AI analysis guide to: \033[1;34m{guide_dest_path}\033[1;0m')
+        else:
+            print(f'\033[1;33mWarning: AI analysis guide not found at {guide_src_path}\033[0m')
+    except Exception as e:
+        print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
+
     # --- Idempotency Check ---
     manifest_path = os.path.join(output_dir, 'summary_manifest.json')
     if os.path.exists(manifest_path):
