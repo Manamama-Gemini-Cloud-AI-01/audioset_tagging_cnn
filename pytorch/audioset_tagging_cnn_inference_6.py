@@ -297,8 +297,8 @@ def sound_event_detection(args):
     try:
         # Using a relative path from the script's location
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'audioset_analysis_guide.md'))
-        guide_dest_path = os.path.join(output_dir, 'audioset_analysis_guide.md')
+        guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'auditory_cognition_guide_template.md'))
+        guide_dest_path = os.path.join(output_dir, 'auditory_cognition_guide_template.md')
         
         if os.path.exists(guide_src_path):
             shutil.copy(guide_src_path, guide_dest_path)
