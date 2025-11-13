@@ -768,8 +768,9 @@ def sound_event_detection(args):
     onset_threshold = 0.20  # Probability to start an event
     offset_threshold = 0.15 # Probability to end an event
     min_event_duration_seconds = 0.5 # Minimum duration to be considered a valid event
+    top_n_per_class = 3 # Get the top N most intense events for each sound class
 
-    detected_events = []
+    events_by_class = {label: [] for label in labels}
 
     # Find event blocks for each sound class
     for i, label in enumerate(labels):
@@ -790,7 +791,7 @@ def sound_event_detection(args):
                 if duration_seconds >= min_event_duration_seconds:
                     event_block_probs = framewise_output[event_start_frame:event_end_frame, i]
                     
-                    detected_events.append({
+                    events_by_class[label].append({
                         'sound_class': label,
                         'start_time_seconds': round(event_start_frame / frames_per_second, 3),
                         'end_time_seconds': round(event_end_frame / frames_per_second, 3),
@@ -799,17 +800,23 @@ def sound_event_detection(args):
                         'average_probability': float(np.mean(event_block_probs))
                     })
 
-    # Sort events by a score combining duration and average probability, then by start time
-    detected_events.sort(key=lambda x: (x['duration_seconds'] * x['average_probability']), reverse=True)
+    # Select the top N events from each class based on peak probability, then combine and sort chronologically
+    top_events = []
+    for label, events in events_by_class.items():
+        if events:
+            # Sort events within the class by peak_probability
+            sorted_class_events = sorted(events, key=lambda x: x['peak_probability'], reverse=True)
+            # Add the top N events to the final list
+            top_events.extend(sorted_class_events[:top_n_per_class])
     
-    # Keep the top 40 most prominent events and then sort them chronologically
-    top_events = sorted(detected_events[:40], key=lambda x: x['start_time_seconds'])
+    # Sort the final combined list of top events by their start time
+    final_sorted_events = sorted(top_events, key=lambda x: x['start_time_seconds'])
 
     with open(summary_csv_path, 'w', newline='') as csvfile:
         fieldnames = ['sound_class', 'start_time_seconds', 'end_time_seconds', 'duration_seconds', 'peak_probability', 'average_probability']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(top_events)
+        writer.writerows(final_sorted_events)
     print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
     # 2. Generate summary_manifest.json
