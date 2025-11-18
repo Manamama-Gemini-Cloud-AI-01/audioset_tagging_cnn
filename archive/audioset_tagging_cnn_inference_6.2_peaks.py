@@ -42,6 +42,8 @@ import soundfile as sf
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
 from scipy.stats import entropy
+from scipy.signal import find_peaks
+import tempfile
 
 # Suppress torchaudio deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -349,7 +351,7 @@ def sound_event_detection(args):
         base_filename = get_filename(original_path_for_conversion)
         
         # New MP3 path
-        mp3_path = os.path.join(audio_dir, f"{base_filename}_converted.mp3")
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename}_converted.mp3")
 
         try:
             print(f"\033[1;36mConverting {original_path_for_conversion} to {mp3_path} using ffmpeg...\033[0m")
@@ -759,58 +761,53 @@ def sound_event_detection(args):
     else:
         print("🎧 Source is audio-only — the eventogram video is the final output.")
 
-    # --- AI-Friendly Summary Generation (Event Block Detection) ---
+    # --- AI-Friendly Summary Generation (Event Block Detection using Peak Prominence) ---
     print("📊  Generating AI-friendly event summary files…")
 
-    # 1. Generate summary_events.csv
     summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
-    
-    onset_threshold = 0.20  # Probability to start an event
-    offset_threshold = 0.15 # Probability to end an event
-    min_event_duration_seconds = 0.5 # Minimum duration to be considered a valid event
-    top_n_per_class = 3 # Get the top N most intense events for each sound class
+    detected_events = []
 
-    events_by_class = {label: [] for label in labels}
+    # --- Parameters for find_peaks ---
+    # Minimum probability for a peak to be considered.
+    min_peak_height = 0.20
+    # Minimum prominence for a peak to be considered significant. Prominence measures how much a peak stands out from its surroundings.
+    min_prominence = 0.1
+    # Minimum horizontal distance (in frames) between neighboring peaks.
+    min_distance_seconds = 0.5
+    min_distance_frames = int(min_distance_seconds * frames_per_second)
 
-    # Find event blocks for each sound class
     for i, label in enumerate(labels):
-        in_event = False
-        event_start_frame = 0
+        signal = framewise_output[:, i]
         
-        for frame_index, prob in enumerate(framewise_output[:, i]):
-            if not in_event and prob > onset_threshold:
-                in_event = True
-                event_start_frame = frame_index
-            elif in_event and prob < offset_threshold:
-                in_event = False
-                event_end_frame = frame_index
-                
-                duration_frames = event_end_frame - event_start_frame
+        # Find peaks (events) in the probability signal for the current class
+        peaks, properties = find_peaks(
+            signal,
+            height=min_peak_height,
+            prominence=min_prominence,
+            distance=min_distance_frames,
+            width=0 # Also return width information
+        )
+        
+        if len(peaks) > 0:
+            # For each detected peak, extract its properties
+            for j, peak_idx in enumerate(peaks):
+                start_frame = int(properties['left_ips'][j])
+                end_frame = int(properties['right_ips'][j])
+                duration_frames = end_frame - start_frame
                 duration_seconds = duration_frames / frames_per_second
-                
-                if duration_seconds >= min_event_duration_seconds:
-                    event_block_probs = framewise_output[event_start_frame:event_end_frame, i]
-                    
-                    events_by_class[label].append({
-                        'sound_class': label,
-                        'start_time_seconds': round(event_start_frame / frames_per_second, 3),
-                        'end_time_seconds': round(event_end_frame / frames_per_second, 3),
-                        'duration_seconds': round(duration_seconds, 3),
-                        'peak_probability': float(np.max(event_block_probs)),
-                        'average_probability': float(np.mean(event_block_probs))
-                    })
 
-    # Select the top N events from each class based on peak probability, then combine and sort chronologically
-    top_events = []
-    for label, events in events_by_class.items():
-        if events:
-            # Sort events within the class by peak_probability
-            sorted_class_events = sorted(events, key=lambda x: x['peak_probability'], reverse=True)
-            # Add the top N events to the final list
-            top_events.extend(sorted_class_events[:top_n_per_class])
-    
-    # Sort the final combined list of top events by their start time
-    final_sorted_events = sorted(top_events, key=lambda x: x['start_time_seconds'])
+                # Create a record for the event
+                detected_events.append({
+                    'sound_class': label,
+                    'start_time_seconds': round(start_frame / frames_per_second, 3),
+                    'end_time_seconds': round(end_frame / frames_per_second, 3),
+                    'duration_seconds': round(duration_seconds, 3),
+                    'peak_probability': float(signal[peak_idx]),
+                    'average_probability': float(np.mean(signal[start_frame:end_frame]))
+                })
+
+    # Sort all detected events chronologically by their start time
+    final_sorted_events = sorted(detected_events, key=lambda x: x['start_time_seconds'])
 
     with open(summary_csv_path, 'w', newline='') as csvfile:
         fieldnames = ['sound_class', 'start_time_seconds', 'end_time_seconds', 'duration_seconds', 'peak_probability', 'average_probability']
@@ -843,7 +840,7 @@ def sound_event_detection(args):
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 6.1.1. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events")
+    print(f"Eventogrammer, version 6.2.01. Recently changed:  * Conversion to aac audio codec, always * Peak Prominence for audio summary")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
