@@ -42,6 +42,7 @@ import soundfile as sf
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
 from scipy.stats import entropy
+import tempfile # Import tempfile for temporary file handling
 
 # Suppress torchaudio deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
@@ -348,8 +349,8 @@ def sound_event_detection(args):
         audio_dir = os.path.dirname(original_path_for_conversion)
         base_filename = get_filename(original_path_for_conversion)
         
-        # New MP3 path
-        mp3_path = os.path.join(audio_dir, f"{base_filename}_converted.mp3")
+        # New MP3 path in temporary directory
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename}_converted.mp3")
 
         try:
             print(f"\033[1;36mConverting {original_path_for_conversion} to {mp3_path} using ffmpeg...\033[0m")
@@ -406,7 +407,7 @@ def sound_event_detection(args):
                 avg_fps = avg_num / avg_den if avg_den else 0
                 if abs(r_fps - avg_fps) > 0.01:
                     print("\033[1;33mDetected VFR video (r_frame_rate={r_fps:.3f}, avg_frame_rate={avg_fps:.3f}). Re-encoding to CFR.\033[0m")
-                    temp_video_path = os.path.join(audio_dir, f'temp_cfr_{get_filename(audio_path)}.mp4')
+                    temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{get_filename(audio_path)}.mp4')
                     try:
                         target_fps = video_fps
                         if not target_fps or target_fps <= 0:
