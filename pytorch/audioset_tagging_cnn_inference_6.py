@@ -844,14 +844,7 @@ def sound_event_detection(args):
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
-    print(f"Eventogrammer, version 6.1.1. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events")
 
- 
-    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU. This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
-    print(f"Using moviepy version: {moviepy.__version__}")
-    print(f"Using torchaudio version (better be pinned at version 2.8.0 for a while...): {torchaudio.__version__}")
-
-    print(f"")
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
     parser.add_argument('audio_path', type=str, help='Path to audio or video file')
@@ -880,6 +873,23 @@ if __name__ == '__main__':
                         help='Use adaptive window size based on event boundaries')
 
     args = parser.parse_args()
+    
+    audio_path = args.audio_path  # <-- extract it
+
+
+    print(f"Eventogrammer, version 6.1.2. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events")
+
+ 
+    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
+    print(f"If the file is too long, use e.g. this to split:") 
+    print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    
+    
+    print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"Using moviepy version: {moviepy.__version__}")
+    print(f"Using torchaudio version (better be pinned at version 2.8.0 for a while...): {torchaudio.__version__}")
+
+    print(f"")
 
     if args.mode == 'audio_tagging':
         audio_tagging(args)
