@@ -556,14 +556,15 @@ def sound_event_detection(args):
 
     with open(csv_path, 'w', newline='') as csvfile:
         threshold = 0.2
+        #But we ignore it:
         writer = csv.writer(csvfile)
         writer.writerow(['time', 'sound', 'probability'])
         for i in range(frames_num):
             timestamp = i / frames_per_second
             for j, label in enumerate(labels):
                 prob = framewise_output[i, j]
-                if prob > threshold:
-                    writer.writerow([round(timestamp, 3), label, float(prob)])
+                #if prob > threshold:
+                writer.writerow([round(timestamp, 3), label, float(prob)])
     print(f'Saved full framewise CSV to: \033[1;34m{csv_path}\033[1;0m')
 
     # Video rendering
@@ -766,19 +767,24 @@ def sound_event_detection(args):
     # 1. Generate summary_events.csv
     summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     
-    onset_threshold = 0.20  # Probability to start an event
-    offset_threshold = 0.15 # Probability to end an event
+    # Set thresholds to a very low value to capture all activity for the top classes
+    onset_threshold = 0.01  # Probability to start an event
+    offset_threshold = 0.01 # Probability to end an event
     min_event_duration_seconds = 0.5 # Minimum duration to be considered a valid event
     top_n_per_class = 3 # Get the top N most intense events for each sound class
 
-    events_by_class = {label: [] for label in labels}
+    # Only track events for the global top_labels (from eventogram)
+    events_by_class = {label: [] for label in top_labels}
 
-    # Find event blocks for each sound class
-    for i, label in enumerate(labels):
+    # Find event blocks for each sound class, focusing only on top_labels
+    for label_idx, label in enumerate(labels):
+        if label not in top_labels: # Skip classes not in the global top_labels for the eventogram
+            continue
+        
         in_event = False
         event_start_frame = 0
         
-        for frame_index, prob in enumerate(framewise_output[:, i]):
+        for frame_index, prob in enumerate(framewise_output[:, label_idx]):
             if not in_event and prob > onset_threshold:
                 in_event = True
                 event_start_frame = frame_index
@@ -790,7 +796,7 @@ def sound_event_detection(args):
                 duration_seconds = duration_frames / frames_per_second
                 
                 if duration_seconds >= min_event_duration_seconds:
-                    event_block_probs = framewise_output[event_start_frame:event_end_frame, i]
+                    event_block_probs = framewise_output[event_start_frame:event_end_frame, label_idx]
                     
                     events_by_class[label].append({
                         'sound_class': label,
@@ -877,7 +883,7 @@ if __name__ == '__main__':
     audio_path = args.audio_path  # <-- extract it
 
 
-    print(f"Eventogrammer, version 6.1.2. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events")
+    print(f"Eventogrammer, version 6.1.3. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events. Threshold for the filter for the 10 most popular events removed.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
