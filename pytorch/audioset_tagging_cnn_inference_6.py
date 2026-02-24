@@ -166,11 +166,11 @@ def get_duration_and_fps(input_media_path):
 
         # Log results
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
-        print(f"⏲  🗃️  Input file duration: \033[1;34m{duration_str}\033[0m")
+        print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
         if fps:
-            print(f"🮲  🗃️  Input video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
+            print(f"🮲  🗃️  Video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
         if width and height:
-            print(f"📽  🗃️  Input video resolution: \033[1;34m{width}x{height}\033[0m")
+            print(f"📽  🗃️  Video resolution: \033[1;34m{width}x{height}\033[0m")
             if height > width:
                 print("\n\033[1;33m--- WARNING: Portrait Video Detected ---\033[0m")
                 print("\nProcessing a portrait video may result in a narrow or distorted overlay.")
@@ -291,7 +291,7 @@ def sound_event_detection(args):
     
     audio_dir = os.path.dirname(audio_path)
     base_filename_for_dir = get_filename(audio_path)
-    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_audioset_tagging_cnn')
+    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_path}_audioset_tagging_cnn')
     create_folder(output_dir)
 
     # --- Copy AI analysis guide ---
@@ -415,7 +415,7 @@ def sound_event_detection(args):
                                 target_fps = r_fps
                                 print(f"\033[1;33mWarning: avg_frame_rate is invalid, falling back to r_frame_rate: {target_fps:.3f}\033[0m")
                             else:
-                                target_fps = 30
+                                target_fps = output_fps
                                 print(f"\033[1;33mWarning: Both avg_frame_rate and r_frame_rate are invalid, falling back to default FPS: {target_fps}\033[0m")
                         
                         subprocess.run([
@@ -568,15 +568,16 @@ def sound_event_detection(args):
     print(f'Saved full framewise CSV to: \033[1;34m{csv_path}\033[1;0m')
 
     # Video rendering
-    fps = video_fps if video_fps else 24
+    # Force output FPS to 30 for faster rendering and smaller files
+
     if args.dynamic_eventogram:
-        print(f"🎞  Rendering dynamic eventogram video …")
+        print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
         window_duration = args.window_duration
         window_frames = int(window_duration * frames_per_second)
         half_window_frames = window_frames // 2
 
         # Precompute unique window frames to improve performance
-        frame_times = np.arange(0, duration, 1/fps)
+        frame_times = np.arange(0, duration, 1/output_fps)
         unique_windows = {}
         for t in frame_times:
             current_frame = int(t * frames_per_second)
@@ -662,12 +663,12 @@ def sound_event_detection(args):
         eventogram_clip = VideoClip(make_frame, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
         eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
-        eventogram_with_audio_clip.fps = fps
+        eventogram_with_audio_clip.fps = output_fps # Use the fixed output_fps
 
         eventogram_with_audio_clip.write_videofile(
             output_video_path,
             codec="libx264",
-            fps=fps,
+            fps=output_fps, # Use the fixed output_fps
             threads=os.cpu_count()
         )
         print(f"🎹 Saved the dynamic eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
@@ -688,12 +689,12 @@ def sound_event_detection(args):
         eventogram_visual_clip = CompositeVideoClip([static_eventogram_clip, marker])
         audio_clip = AudioFileClip(video_input_path)
         eventogram_with_audio_clip = eventogram_visual_clip.with_audio(audio_clip)
-        eventogram_with_audio_clip.fps = fps
+        eventogram_with_audio_clip.fps = output_fps
 
         eventogram_with_audio_clip.write_videofile(
             output_video_path,
             codec="libx264",
-            fps=fps,
+            fps=output_fps,
             threads=os.cpu_count()
         )
         print(f"🎹 Saved the static eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
@@ -881,17 +882,22 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     audio_path = args.audio_path  # <-- extract it
+    #Hard code the output's frequency:
+    output_fps = 25
 
-
-    print(f"Eventogrammer, version 6.1.3. Recently changed:  * Conversion to aac audio codec, always * Using new logic for key audio events. Threshold for the filter for the 10 most popular events removed.")
+    print(f"Eventogrammer, version 6.1.5. Recently changed:  * Always using the conversion to the aac audio codec, just in case. Using new logic for key audio events. Threshold for the filter for the 10 most popular events removed. Added info about the .pth models used. output_fps = 30 standardized.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
     print(f"If the file is too long, use e.g. this to split:") 
     print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path} -c copy -f segment -segment_time 1200 output_%03d.mp4")
     
-    
+
     print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"Note on models:")   
+    print(f"1. Functional Difference   * `Cnn14_mAP=0.431.pth` (Audio Tagging): This is the standard CNN14 model. It uses Feature-level pooling, meaning it collapses the time dimension (summarizing features) before the final  classification layers. It is optimized for global tagging (answering 'What sounds are in this 10-second clip?').") 
+    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip.")
+    print(f" Why use one over the other?  * Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by your inference script to generate the 'Eventograms' and the CSV logs.   * Accuracy (mAP): The standard Cnn14 has a higher mean Average Precision (0.431 vs 0.385). Feature-level pooling is generally 'smarter' for identifying sounds overall, but it loses the precise timing information that DecisionLevelMax preserves." ) 
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version (better be pinned at version 2.8.0 for a while...): {torchaudio.__version__}")
 
