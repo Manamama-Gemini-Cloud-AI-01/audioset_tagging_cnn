@@ -1,17 +1,15 @@
 
-
-checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth
-#checkpoint_path=Cnn14_mAP=0.431.pth
-
 # Model Personalities:
+checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth
 # Cnn14_DecisionLevelMax_mAP=0.385.pth (The Cautious Listener): This model is the true "Sound Event Detector."
 # It provides precise, time-stamped Eventogram visualizations. It's a careful observer, sometimes missing subtle
 # events but reliably capturing time-sensitive changes. It excels at detecting nuanced human sounds like laughter.
 
+# checkpoint_path=Cnn14_mAP=0.431.pth
 # Cnn14_mAP=0.431.pth (The Enthusiastic Amplifier): This model is actually a "Sound Tagger" forced into SED.
 # It tends to be overconfident, acting as an "Enthusiastic Amplifier" for many sound events. It often
 # exaggerates detections (like "barking" for splashing dog sounds) but can sometimes capture the overall
-# emotional tone or dominant events of a scene more vividly due to its broad-stroke tagging nature.
+# emotional tone or dominant events of a scene more vividly due to its broad-stroke tagging nature. It is less precise, less fine. It detects "Silence" and "Male speech" more readily. 
 
 echo "We are using $checkpoint_path here. "
 
