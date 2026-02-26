@@ -985,7 +985,7 @@ def sound_event_detection(args):
                 except Exception as e:
                     print(f"\033[1;33mWarning: Failed to delete temporary CFR video {temp_video_path}: {e}\033[0m")
         else:
-            print("🎧 Source is audio-only — the eventogram video is the final output.")
+            print("🎧 As the source is audio-only, the eventogram video is the final media output and no overlay video shall be created.")
 
 
     
@@ -995,9 +995,9 @@ if __name__ == '__main__':
 
 
     parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
-    parser.add_argument('audio_path', type=str, help='Path to audio or video file')
+    parser.add_argument('audio_path', type=str, help='Path to the media file')
     parser.add_argument('--mode', choices=['audio_tagging', 'sound_event_detection'],
-                        default='sound_event_detection', help='Select processing mode')
+                        default='sound_event_detection', help='Select the processing mode')
     parser.add_argument('--sample_rate', type=int, default=32000)
     parser.add_argument('--window_size', type=int, default=1024)
     parser.add_argument('--hop_size', type=int, default=320)
@@ -1018,9 +1018,9 @@ if __name__ == '__main__':
     parser.add_argument('--crf', type=int, default=23, help='FFmpeg CRF value (0-51, lower is higher quality)')
     parser.add_argument('--bitrate', type=str, default=None, help='FFmpeg video bitrate (e.g., "2000k" for 2 Mbps)')
     parser.add_argument('--window_duration', type=float, default=30.0,
-                        help='Duration of sliding window for dynamic eventogram (seconds)')
+                        help='Duration of sliding window for the dynamic eventogram (in seconds)')
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
-                        help='Use adaptive window size based on event boundaries')
+                        help='Use adaptive window size based on the event boundaries')
 
     args = parser.parse_args()
     
@@ -1038,11 +1038,11 @@ if __name__ == '__main__':
 
     print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
     print(f"Note on models:")   
-    print(f"1. Functional Difference   * `Cnn14_mAP=0.431.pth` (Audio Tagging): This is the standard CNN14 model. It uses Feature-level pooling, meaning it collapses the time dimension (summarizing features) before the final  classification layers. It is optimized for global tagging (answering 'What sounds are in this 10-second clip?').") 
-    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip.")
-    print(f" Why use one over the other?  * Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by your inference script to generate the 'Eventograms' and the CSV logs.   * Accuracy (mAP): The standard Cnn14 has a higher mean Average Precision (0.431 vs 0.385). Feature-level pooling is generally 'smarter' for identifying sounds overall, but it loses the precise timing information that DecisionLevelMax preserves." ) 
+    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.) 
+    print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode."
+    print()
     print(f"Using moviepy version: {moviepy.__version__}")
-    print(f"Using torchaudio version (better be pinned at version 2.8.0 for a while...): {torchaudio.__version__}")
+    print(f"Using torchaudio version: {torchaudio.__version__}")
 
     print(f"")
 
