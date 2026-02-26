@@ -38,8 +38,11 @@ echo "Input file and parameters: $@"
 
 echo "Note: If you see errors with sox / mp3 parsing → install sox + libsox-fmt-mp3, test it via 'sox --info "$@" ' "
 
-# Run inference with dynamic eventogram and auto-sanitization enabled
-time python3 $HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py \
+cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
+
+
+# Run inference with dynamic eventogram 
+time python $HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py \
     "$@" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \
