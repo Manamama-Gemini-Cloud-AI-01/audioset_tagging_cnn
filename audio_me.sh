@@ -14,6 +14,9 @@ CHECKPOINT_PATH="/media/zezen/HP_P7_Data/Temp/AI_models/audioset_tagging_cnn/Cnn
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
 #Maybe we are in Termux? 
 CHECKPOINT_PATH="/data/data/com.termux/files/home/storage/external_SD/LLMs/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth"
+
+CHECKPOINT_PATH="/storage/emulated/0/LLMs/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth"
+
 fi
 
 if [[ ! -f "$1" ]]; then
