@@ -45,3 +45,6 @@ time python3 $HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_taggin
     --checkpoint_path="$CHECKPOINT_PATH" \
     --dynamic_eventogram \
     --cuda
+
+
+echo
