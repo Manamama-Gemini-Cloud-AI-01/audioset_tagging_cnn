@@ -1,5 +1,6 @@
 # Technical Documentation: `audioset_tagging_cnn_inference_6.py`
 
+**Version:** 6.3.5
 **Source:** Adapted from the original PANNs repository: https://github.com/qiuqiangkong/audioset_tagging_cnn
 
 ## 1. Overview
@@ -61,14 +62,49 @@ The script operates in a single mode: `sound_event_detection`. The process is as
    *   `summary_events.csv`: A user-friendly summary that identifies continuous blocks of sound events.
    
    *   `detailed_events_delta_ai_attention_friendly.json`: A momentum-aware map of sound events using probability deltas, specifically optimized for AI attention mechanisms to detect 'attacks', 'decays', and performance dynamics.
+   
+   *   `interactive_dashboard.html`: A self-contained, portable Plotly dashboard for exploring the top 50 sound events with zoom and filtering.
+   
+   *   `summary_manifest.json`: A JSON file cataloging all the generated artifacts.
 
-## 4. Key Technical Details
+## 4. Model Performance & Personality Analysis
+
+Based on cross-model comparison tests (e.g., "duck chase" and "marketing hall" recordings), the available PANNs models exhibit distinct behaviors:
+
+### 1. The Cautious Listener (`Cnn14_DecisionLevelMax_mAP=0.385.pth`)
+
+* **Personality:** Sober, conservative, and precise.
+* **Pros:** The only model supporting full **Sound Event Detection (SED)** with high-res `framewise_output`. Excellent for precise time-stamping and capturing short, sharp events (like a car "toot").
+* **Cons:** Lower overall sensitivity; can miss faint background sounds.
+* **Verdict:** **Primary daily-driver** for timeline-accurate analysis.
+
+### 2. The Enthusiastic Amplifier (`Cnn14_mAP=0.431.pth`)
+
+* **Personality:** Overconfident and aggressive.
+* **Pros:** High sensitivity; finds "Dog" or "Speech" even in noisy or distant recordings.
+* **Cons:** High False Positive rate (hallucinates detail). Only supports **Global Tagging** (no timeline).
+* **Verdict:** Best for general "Cast List" identification of long clips.
+
+### 3. The Sensitive Hybrid (`Wavegram_Logmel_Cnn14_mAP=0.439.pth`)
+
+* **Personality:** Sharp but fragile.
+* **Pros:** Strongest overall detection (best mAP). Balanced sensitivity between species (e.g., identifies both Dog and Duck correctly).
+* **Cons:** Computationally heavier. Prone to padding-related `RuntimeError` on very short (<2s) clips. Global tagging only.
+* **Verdict:** Best for complex multi-source scenes where high accuracy is required.
+
+### 4. Technical Constraints
+
+* **The 16k Model:** Requires strict 16kHz/512 window configuration; currently incompatible with the 32kHz pipeline.
+* **Sensitivity Thresholding:** PANNs is fundamentally a "Change Detector." The **Detailed Delta JSON** is recommended for distinguishing between biological sources and human imitation (performance).
+
+## 5. Key Technical Details
 
 - **Execution Context:** The script MUST be run from the project's root directory, as it relies on relative paths to load configuration files (e.g., `config.py` which points to the class labels CSV).
 - **Eventogram X-Axis Alignment:** The alignment of the animated marker with the static eventogram image is achieved by dynamically calculating the plot's left margin based on the pixel width of the y-axis labels, and then using those same fractional coordinates to guide the marker's animation. This ensures perfect synchronization.
 - **Memory Management:** The use of 3-minute chunks for inference is a key feature that allows the script to process very large files without consuming excessive RAM.
+- **Auto-Sanitization:** The script includes a "Sanitary Gate" that automatically uses FFmpeg to transcode corrupt audio streams (e.g., missing MPEG headers) into clean PCM format before loading.
 
-## 5. Usage Example
+## 6. Usage Example
 
 ```bash
 # Ensure you are in the root directory of the audioset_tagging_cnn project
@@ -84,18 +120,6 @@ python3 pytorch/audioset_tagging_cnn_inference_6.py \
     --cuda
 ```
 
-
-
-The values in the model's names correspond to the mAP on AudioSet eval, e.g. "Model filenamemAP on AudioSet evalArchitecture notesBest for / CommentsCnn14_mAP=0.431.pth0.431Standard CNN14 (VGG-like, log-mel input)Strong baseline, good balance speed ↔ accuracy, clip-level strong"
-
-
-
-
-
-You can download them via e.g.  `wget https://zenodo.org/record/3987831/files/Wavegram_Logmel_Cnn14_mAP%3D0.439.pth?download=1` 
-
-
-
 ### Quick Reference Table for Your Files
 
 | Your .pth file                       | Required --model_type    | Expected behavior in your script                | Notes / Recommendation                    |
@@ -105,4 +129,6 @@ You can download them via e.g.  `wget https://zenodo.org/record/3987831/files/Wa
 | Cnn14_16k_mAP=0.438.pth              | `Cnn14_16k`              | Slightly better mAP, needs 16 kHz input ideally | Try if distant speech detection improves  |
 | Wavegram_Logmel_Cnn14_mAP=0.439.pth  | `Wavegram_Logmel_Cnn14`  | Potentially strongest overall, hybrid input     | Recommended next test — best paper result |
 
-### 
+The values in the model's names correspond to the mAP on AudioSet eval 
+
+You can download them via e.g.  `wget https://zenodo.org/record/3987831/files/Wavegram_Logmel_Cnn14_mAP%3D0.439.pth?download=1` 

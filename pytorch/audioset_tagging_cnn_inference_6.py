@@ -293,7 +293,8 @@ def sound_event_detection(args):
     
     audio_dir = os.path.dirname(audio_path)
     base_filename_for_dir = get_filename(audio_path)
-    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_path}_audioset_tagging_cnn')
+    checkpoint_name = os.path.basename(checkpoint_path)
+    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
 
     # --- Copy AI analysis guide ---
@@ -1039,7 +1040,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.3.2. Recently changed:  * Added auto-sanitization of corrupt audio streams via FFmpeg. Creating 'detailed_events_delta_ai_attention_friendly.json' file now. Integrated portable interactive Plotly dashboard (Top 50). Removed creation of manifests.")
+    print(f"Eventogrammer, version 6.3.5. Recently changed:  * Fixed path bug in output directory naming. Added auto-sanitization of corrupt audio streams via FFmpeg. Integrated portable interactive Plotly dashboard (Top 50). Restored manifest generation.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
