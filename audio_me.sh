@@ -35,19 +35,21 @@ echo "--- AudioSet Tagging CNN Inference (SED Mode) ---"
 echo "Model Type: $MODEL_TYPE"
 echo "Checkpoint path: $CHECKPOINT_PATH"
 echo "Input file and parameters: $@"
+echo "Add  '--dynamic_eventogram'  or  '--static_eventogram'  for a video of the graph with a moving marker."
+echo 
 
 echo "Note: If you see errors with sox / mp3 parsing → install sox + libsox-fmt-mp3, test it via 'sox --info "$@" ' "
+echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
 
 cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
 
 # Run inference with dynamic eventogram 
 time python $HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py \
-    "$@" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \
-    --dynamic_eventogram \
-    --cuda
+    --cuda \
+    "$@"    
 
 
 echo

@@ -313,28 +313,23 @@ def sound_event_detection(args):
         print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
 
-    '''
-    #Removed for now: we do not create such manifests anymore  
-    # --- Idempotency Check ---
-    manifest_path = os.path.join(output_dir, 'summary_manifest.json')
-    if os.path.exists(manifest_path):
-        print(f"✅ Skipping {audio_path} - summary_manifest.json already exists.")
-        return
+
         
-    '''
 
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
+    # --- Idempotency Check ---
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
-    if args.dynamic_eventogram:
-        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_dynamic.mp4')
-    else:
-        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram.mp4')
-    
+    if os.path.exists(csv_path):
+        print(f"✅ Skipping {audio_path}, because {csv_path} already exists. Remove that file to reprocess that folder.")
+        return
+
+    # '''    
     disk_usage = shutil.disk_usage(audio_dir)
     if disk_usage.free < 1e9:
         print(f"\033[1;31mError: Insufficient disk space ({disk_usage.free / 1e9:.2f} GB free). Exiting.\033[0m")
         return
+    #'''
     
     Model = eval(model_type)
     model = Model(sample_rate=sample_rate, window_size=window_size, 
@@ -592,200 +587,8 @@ def sound_event_detection(args):
             writer.writerow([round(timestamp, 3)] + probs)
     print(f'Saved full framewise CSV (wide matrix) to: \033[1;34m{csv_path}\033[1;0m')
 
-    # Video rendering
-    # Force output FPS to 30 for faster rendering and smaller files
 
-    if args.dynamic_eventogram:
-        print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
-        window_duration = args.window_duration
-        window_frames = int(window_duration * frames_per_second)
-        half_window_frames = window_frames // 2
 
-        # Precompute unique window frames to improve performance
-        frame_times = np.arange(0, duration, 1/output_fps)
-        unique_windows = {}
-        for t in frame_times:
-            current_frame = int(t * frames_per_second)
-            start_frame = max(0, current_frame - half_window_frames)
-            end_frame = min(frames_num, current_frame + half_window_frames)
-            window_key = (start_frame, end_frame)
-            if window_key not in unique_windows:
-                window_output, window_indexes = get_dynamic_top_events(framewise_output, start_frame, end_frame, top_k)
-                if window_output.size == 0:
-                    window_output = np.zeros((end_frame - start_frame, top_k))
-                    window_indexes = sorted_indexes[:top_k]
-                unique_windows[window_key] = (window_output, window_indexes)
-
-        def make_frame(t):
-            current_frame = int(t * frames_per_second)
-            start_frame = max(0, current_frame - half_window_frames)
-            end_frame = min(frames_num, current_frame + half_window_frames)
-            
-            # Adaptive window size (if enabled)
-            if args.use_adaptive_window:
-                kl_threshold = 0.5
-                for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
-                    if start_frame - offset >= 0:
-                        prev_prob = np.mean(framewise_output[start_frame - offset:start_frame], axis=0)
-                        curr_prob = np.mean(framewise_output[start_frame:start_frame + offset], axis=0)
-                        kl_div = compute_kl_divergence(prev_prob, curr_prob)
-                        if kl_div > kl_threshold:
-                            start_frame = max(0, start_frame - offset // 2)
-                            break
-                    if end_frame + offset < frames_num:
-                        curr_prob = np.mean(framewise_output[end_frame - offset:end_frame], axis=0)
-                        next_prob = np.mean(framewise_output[end_frame:end_frame + offset], axis=0)
-                        kl_div = compute_kl_divergence(curr_prob, next_prob)
-                        if kl_div > kl_threshold:
-                            end_frame = min(frames_num, end_frame + offset // 2)
-                            break
-            
-            window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
-            
-            # Create frame
-            fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
-            axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
-
-            # Spectrogram for window
-            stft_window = stft[:, start_frame:end_frame]
-            axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
-            axs[0].set_ylabel('Frequency bins', fontsize=14)
-            axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
-            print(f'; (t={t:.1f}s)')
-            # Eventogram for window
-            axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
-            window_labels = np.array(labels)[window_indexes]
-            axs[1].yaxis.set_ticks(np.arange(0, top_k))
-            axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
-            axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-            axs[1].set_xlabel('Seconds', fontsize=14)
-            axs[1].xaxis.set_ticks_position('bottom')
-
-            # Adjust x-axis ticks for both plots
-            window_seconds = (end_frame - start_frame) / frames_per_second
-            tick_interval_window = max(1, int(window_seconds / 5))
-            x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
-            x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
-            
-            for ax in axs:
-                ax.xaxis.set_ticks(x_ticks_window)
-                ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
-                ax.set_xlim(0, end_frame - start_frame)
-
-            # Add marker
-            marker_x = current_frame - start_frame
-            for ax in axs:
-                ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
-
-            fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
-            plt.close(fig)
-            return img
-
-        # Generate dynamic video
-        eventogram_clip = VideoClip(make_frame, duration=duration)
-        audio_clip = AudioFileClip(video_input_path)
-        eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
-        eventogram_with_audio_clip.fps = output_fps # Use the fixed output_fps
-
-        eventogram_with_audio_clip.write_videofile(
-            output_video_path,
-            codec="libx264",
-            fps=output_fps, # Use the fixed output_fps
-            threads=os.cpu_count()
-        )
-        print(f"🎹 Saved the dynamic eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
-    else:
-        print(f"🎞  Rendering static eventogram video …")
-        static_eventogram_clip = ImageClip(fig_path, duration=duration)
-
-        def marker_position(t):
-            w = static_eventogram_clip.w
-            x_start = int(left_frac * w)
-            x_end = w
-            frac = np.clip(t / max(duration, 1e-8), 0.0, 1.0)
-            x_pos = x_start + (x_end - x_start) * frac
-            return (x_pos, 0)
-
-        marker = ColorClip(size=(2, static_eventogram_clip.h), color=(255, 0, 0)).with_duration(duration)
-        marker = marker.with_position(marker_position)
-        eventogram_visual_clip = CompositeVideoClip([static_eventogram_clip, marker])
-        audio_clip = AudioFileClip(video_input_path)
-        eventogram_with_audio_clip = eventogram_visual_clip.with_audio(audio_clip)
-        eventogram_with_audio_clip.fps = output_fps
-
-        eventogram_with_audio_clip.write_videofile(
-            output_video_path,
-            codec="libx264",
-            fps=output_fps,
-            threads=os.cpu_count()
-        )
-        print(f"🎹 Saved the static eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
-
-    if is_video:
-        print("🎬  Overlaying source media with the eventogram…")
-        root, ext = os.path.splitext(output_video_path)
-        final_output_path = f"{root}_overlay{ext}"
-        print(f"🎬  Source resolution:")
-        _, _, base_w, base_h = get_duration_and_fps(audio_path)
-        print(f"💁  Overlay resolution:")
-        _, _, ovr_w, ovr_h = get_duration_and_fps(output_video_path)
-        if base_w >= ovr_w:
-            target_width, target_height = base_w, base_h
-        else:
-            target_width = ovr_w
-            target_height = int(base_h * ovr_w / base_w)
-            if target_height % 2:
-                target_height += 1
-        print(f"🎯 Target resolution: {target_width}x{target_height}")
-        main_input, overlay_input = audio_path, output_video_path
-
-        overlay_cmd = [
-           
-            "ffmpeg", "-y",
-            "-i", main_input,
-            "-i", overlay_input,
-            "-loglevel", "warning",
-            "-filter_complex",
-            (
-                f"[0:v]scale={target_width}:{target_height}[main];"
-                f"[1:v]scale={target_width}:{int(target_height * args.overlay_size)}[ovr];"
-                f"[ovr]format=rgba,colorchannelmixer=aa={args.translucency}[ovr_t];"
-                "[main][ovr_t]overlay=x=0:y=H-h[v]"
-            ),
-            "-map", "[v]",
-            "-map", "0:a?",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-        ]
-        if args.bitrate:
-            overlay_cmd.extend(["-b:v", args.bitrate])
-        else:
-            overlay_cmd.extend(["-crf", str(args.crf)])
-        overlay_cmd.extend([
-            "-c:a", "aac",
-            "-shortest",
-            final_output_path
-        ])
-        #Note: the aac codec is needed for some "Opus unusual, experimental in MP4 containers" cases
-
-        try:
-            subprocess.run(overlay_cmd, check=True)
-            print(f"✅ 🎥 The new overlaid video has been saved to: \033[1;34m{final_output_path}\033[1;0m")
-        except subprocess.CalledProcessError as e:
-            print(f"\033[1;31mError during FFmpeg overlay: {e}\033[0m")
-            return
-        
-        if temp_video_path and os.path.exists(temp_video_path):
-            try:
-                os.remove(temp_video_path)
-                print(f"Deleted temporary CFR video: \033[1;34m{temp_video_path}\033[1;0m")
-            except Exception as e:
-                print(f"\033[1;33mWarning: Failed to delete temporary CFR video {temp_video_path}: {e}\033[0m")
-    else:
-        print("🎧 Source is audio-only — the eventogram video is the final output.")
 
     # --- AI-Friendly Summary Generation (Event Block Detection) ---
     print("📊  Generating AI-friendly event summary files…")
@@ -977,30 +780,213 @@ def sound_event_detection(args):
     print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
 
 
-    '''
-    # 2. Generate summary_manifest.json
-    manifest_path = os.path.join(output_dir, 'summary_manifest.json')
-    final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
     
-    artifacts = {
-        'source_file': os.path.basename(audio_path),
-        'analysis_type': 'Audio Event Detection with PANNs',
-        'artifacts': {
-            'summary_events.csv': 'A summary of the most prominent, continuous sound events, detailing their start, end, duration, and intensity.',
-            'eventogram.png': 'Visualization of the top 10 sound events over time.',
-            'full_event_log.csv': 'Full probability matrix (wide format) for all 527 sound classes across all time frames.',
-            'detailed_events_delta_ai_attention_friendly.json': 'A detailed map of sound events using probability deltas, optimized for AI attention mechanisms (momentum-aware).',
-            'interactive_dashboard.html': 'Interactive, self-contained Plotly dashboard for exploring the top 50 sound events with zoom and filtering.',
-            os.path.basename(output_video_path): 'Video of the eventogram with original audio.',
-        }
-    }
-    if os.path.exists(final_overlay_path):
-        artifacts['artifacts'][os.path.basename(final_overlay_path)] = 'Original video overlaid with the eventogram visualization.'
 
-    with open(manifest_path, 'w') as f:
-        json.dump(artifacts, f, indent=4)
-    print(f'Saved manifest JSON to: \033[1;34m{manifest_path}\033[1;0m')
-    '''
+
+    # Video rendering
+    # Force output FPS to 30 for faster rendering and smaller files
+
+
+ 
+        
+    if args.dynamic_eventogram:
+        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_dynamic.mp4')
+        print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
+        window_duration = args.window_duration
+        window_frames = int(window_duration * frames_per_second)
+        half_window_frames = window_frames // 2
+
+        # Precompute unique window frames to improve performance
+        frame_times = np.arange(0, duration, 1/output_fps)
+        unique_windows = {}
+        for t in frame_times:
+            current_frame = int(t * frames_per_second)
+            start_frame = max(0, current_frame - half_window_frames)
+            end_frame = min(frames_num, current_frame + half_window_frames)
+            window_key = (start_frame, end_frame)
+            if window_key not in unique_windows:
+                window_output, window_indexes = get_dynamic_top_events(framewise_output, start_frame, end_frame, top_k)
+                if window_output.size == 0:
+                    window_output = np.zeros((end_frame - start_frame, top_k))
+                    window_indexes = sorted_indexes[:top_k]
+                unique_windows[window_key] = (window_output, window_indexes)
+
+        def make_frame(t):
+            current_frame = int(t * frames_per_second)
+            start_frame = max(0, current_frame - half_window_frames)
+            end_frame = min(frames_num, current_frame + half_window_frames)
+            
+            # Adaptive window size (if enabled)
+            if args.use_adaptive_window:
+                kl_threshold = 0.5
+                for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
+                    if start_frame - offset >= 0:
+                        prev_prob = np.mean(framewise_output[start_frame - offset:start_frame], axis=0)
+                        curr_prob = np.mean(framewise_output[start_frame:start_frame + offset], axis=0)
+                        kl_div = compute_kl_divergence(prev_prob, curr_prob)
+                        if kl_div > kl_threshold:
+                            start_frame = max(0, start_frame - offset // 2)
+                            break
+                    if end_frame + offset < frames_num:
+                        curr_prob = np.mean(framewise_output[end_frame - offset:end_frame], axis=0)
+                        next_prob = np.mean(framewise_output[end_frame:end_frame + offset], axis=0)
+                        kl_div = compute_kl_divergence(curr_prob, next_prob)
+                        if kl_div > kl_threshold:
+                            end_frame = min(frames_num, end_frame + offset // 2)
+                            break
+            
+            window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
+            
+            # Create frame
+            fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
+            gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+            axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
+
+            # Spectrogram for window
+            stft_window = stft[:, start_frame:end_frame]
+            axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
+            axs[0].set_ylabel('Frequency bins', fontsize=14)
+            axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
+            print(f'; (t={t:.1f}s)')
+            # Eventogram for window
+            axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+            window_labels = np.array(labels)[window_indexes]
+            axs[1].yaxis.set_ticks(np.arange(0, top_k))
+            axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
+            axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+            axs[1].set_xlabel('Seconds', fontsize=14)
+            axs[1].xaxis.set_ticks_position('bottom')
+
+            # Adjust x-axis ticks for both plots
+            window_seconds = (end_frame - start_frame) / frames_per_second
+            tick_interval_window = max(1, int(window_seconds / 5))
+            x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
+            x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
+            
+            for ax in axs:
+                ax.xaxis.set_ticks(x_ticks_window)
+                ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
+                ax.set_xlim(0, end_frame - start_frame)
+
+            # Add marker
+            marker_x = current_frame - start_frame
+            for ax in axs:
+                ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
+
+            fig.canvas.draw()
+            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
+            plt.close(fig)
+            return img
+
+        # Generate dynamic video
+        eventogram_clip = VideoClip(make_frame, duration=duration)
+        audio_clip = AudioFileClip(video_input_path)
+        eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
+        eventogram_with_audio_clip.fps = output_fps # Use the fixed output_fps
+
+        eventogram_with_audio_clip.write_videofile(
+            output_video_path,
+            codec="libx264",
+            fps=output_fps, # Use the fixed output_fps
+            threads=os.cpu_count()
+        )
+        print(f"🎹 Saved the dynamic eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
+
+    
+    if args.static_eventogram:    
+        print(f"🎞  Rendering static eventogram video …")
+        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+        static_eventogram_clip = ImageClip(fig_path, duration=duration)
+
+        def marker_position(t):
+            w = static_eventogram_clip.w
+            x_start = int(left_frac * w)
+            x_end = w
+            frac = np.clip(t / max(duration, 1e-8), 0.0, 1.0)
+            x_pos = x_start + (x_end - x_start) * frac
+            return (x_pos, 0)
+
+        marker = ColorClip(size=(2, static_eventogram_clip.h), color=(255, 0, 0)).with_duration(duration)
+        marker = marker.with_position(marker_position)
+        eventogram_visual_clip = CompositeVideoClip([static_eventogram_clip, marker])
+        audio_clip = AudioFileClip(video_input_path)
+        eventogram_with_audio_clip = eventogram_visual_clip.with_audio(audio_clip)
+        eventogram_with_audio_clip.fps = output_fps
+
+        eventogram_with_audio_clip.write_videofile(
+            output_video_path,
+            codec="libx264",
+            fps=output_fps,
+            threads=os.cpu_count()
+        )
+        print(f"🎹 Saved the static eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
+
+
+    if (args.dynamic_eventogram or args.static_eventogram):
+        if is_video:
+            print("🎬  Overlaying the source media with the created eventogram…")
+            root, ext = os.path.splitext(output_video_path)
+            final_output_path = f"{root}_overlay{ext}"
+            print(f"🎬  Source resolution:")
+            _, _, base_w, base_h = get_duration_and_fps(audio_path)
+            print(f"💁  Overlay resolution:")
+            _, _, ovr_w, ovr_h = get_duration_and_fps(output_video_path)
+            if base_w >= ovr_w:
+                target_width, target_height = base_w, base_h
+            else:
+                target_width = ovr_w
+                target_height = int(base_h * ovr_w / base_w)
+                if target_height % 2:
+                    target_height += 1
+            print(f"🎯 Target resolution: {target_width}x{target_height}")
+            main_input, overlay_input = audio_path, output_video_path
+
+            overlay_cmd = [
+               
+                "ffmpeg", "-y",
+                "-i", main_input,
+                "-i", overlay_input,
+                "-loglevel", "warning",
+                "-filter_complex",
+                (
+                    f"[0:v]scale={target_width}:{target_height}[main];"
+                    f"[1:v]scale={target_width}:{int(target_height * args.overlay_size)}[ovr];"
+                    f"[ovr]format=rgba,colorchannelmixer=aa={args.translucency}[ovr_t];"
+                    "[main][ovr_t]overlay=x=0:y=H-h[v]"
+                ),
+                "-map", "[v]",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+            ]
+            if args.bitrate:
+                overlay_cmd.extend(["-b:v", args.bitrate])
+            else:
+                overlay_cmd.extend(["-crf", str(args.crf)])
+            overlay_cmd.extend([
+                "-c:a", "aac",
+                "-shortest",
+                final_output_path
+            ])
+            #Note: the aac codec is needed for some "Opus unusual, experimental in MP4 containers" cases
+
+            try:
+                subprocess.run(overlay_cmd, check=True)
+                print(f"✅ 🎥 The new overlaid video has been saved to: \033[1;34m{final_output_path}\033[1;0m")
+            except subprocess.CalledProcessError as e:
+                print(f"\033[1;31mError during FFmpeg overlay: {e}\033[0m")
+                return
+            
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.remove(temp_video_path)
+                    print(f"Deleted temporary CFR video: \033[1;34m{temp_video_path}\033[1;0m")
+                except Exception as e:
+                    print(f"\033[1;33mWarning: Failed to delete temporary CFR video {temp_video_path}: {e}\033[0m")
+        else:
+            print("🎧 Source is audio-only — the eventogram video is the final output.")
+
 
     
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
@@ -1026,7 +1012,9 @@ if __name__ == '__main__':
     parser.add_argument('--overlay_size', type=float, default=0.2,
                         help='Overlay size as fraction of video height')
     parser.add_argument('--dynamic_eventogram', action='store_true', default=False,
-                        help='Generate dynamic eventogram with scrolling window')
+                        help='Generate dynamic eventogram with scrolling window (slower to generate)')
+    parser.add_argument('--static_eventogram', action='store_true', default=False,
+                        help='Generate static eventogram with a scrolling marker (faster to generate)')                        
     parser.add_argument('--crf', type=int, default=23, help='FFmpeg CRF value (0-51, lower is higher quality)')
     parser.add_argument('--bitrate', type=str, default=None, help='FFmpeg video bitrate (e.g., "2000k" for 2 Mbps)')
     parser.add_argument('--window_duration', type=float, default=30.0,
@@ -1040,7 +1028,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.3.5. Recently changed:  * Fixed path bug in output directory naming. Added auto-sanitization of corrupt audio streams via FFmpeg. Integrated portable interactive Plotly dashboard (Top 50). Restored manifest generation.")
+    print(f"Eventogrammer, version 6.3.4. Recently changed:  * Fixed path bug in output directory naming. Added auto-sanitization of corrupt audio streams via FFmpeg. Integrated portable interactive Plotly dashboard (Top 50). Removed manifest generation. Added a static_eventogram argument. Reorder artifact creation logic.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
