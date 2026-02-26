@@ -83,3 +83,26 @@ python3 pytorch/audioset_tagging_cnn_inference_6.py \
     --checkpoint_path="$CHECKPOINT_PATH" \
     --cuda
 ```
+
+
+
+The values in the model's names correspond to the mAP on AudioSet eval, e.g. "Model filenamemAP on AudioSet evalArchitecture notesBest for / CommentsCnn14_mAP=0.431.pth0.431Standard CNN14 (VGG-like, log-mel input)Strong baseline, good balance speed ↔ accuracy, clip-level strong"
+
+
+
+
+
+You can download them via e.g.  `wget https://zenodo.org/record/3987831/files/Wavegram_Logmel_Cnn14_mAP%3D0.439.pth?download=1` 
+
+
+
+### Quick Reference Table for Your Files
+
+| Your .pth file                       | Required --model_type    | Expected behavior in your script                | Notes / Recommendation                    |
+| ------------------------------------ | ------------------------ | ----------------------------------------------- | ----------------------------------------- |
+| Cnn14_DecisionLevelMax_mAP=0.385.pth | `Cnn14_DecisionLevelMax` | Full SED + eventogram (your current baseline)   | Keep using for precise timestamps         |
+| Cnn14_mAP=0.431.pth                  | `Cnn14`                  | Good tagging, weaker localization               | Test for comparison on speech strength    |
+| Cnn14_16k_mAP=0.438.pth              | `Cnn14_16k`              | Slightly better mAP, needs 16 kHz input ideally | Try if distant speech detection improves  |
+| Wavegram_Logmel_Cnn14_mAP=0.439.pth  | `Wavegram_Logmel_Cnn14`  | Potentially strongest overall, hybrid input     | Recommended next test — best paper result |
+
+### 

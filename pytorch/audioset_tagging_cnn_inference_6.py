@@ -42,6 +42,7 @@ import soundfile as sf
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
 import collections
+import plotly.offline as pyo
 from scipy.stats import entropy
 import tempfile # Import tempfile for temporary file handling
 
@@ -319,7 +320,7 @@ def sound_event_detection(args):
         print(f"✅ Skipping {audio_path} - summary_manifest.json already exists.")
         return
         
-        '''
+    '''
 
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
@@ -433,7 +434,26 @@ def sound_event_detection(args):
                         print(f"\033[1;31mError during VFR-to-CFR conversion: {e}\033[0m")
                         return
 
-    waveform, sr = torchaudio.load(video_input_path)
+    try:
+        waveform, sr = torchaudio.load(video_input_path)
+    except Exception as e:
+        print(f"\033[1;33mWarning: Failed to load audio directly ({e}). Attempting FFmpeg sanitization...\033[0m")
+        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{get_filename(audio_path)}.wav')
+        try:
+            subprocess.run([
+                'ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'
+            ], check=True)
+            waveform, sr = torchaudio.load(sanitized_temp_path)
+            print(f"✅ Sanitization successful. Loaded audio from: \033[1;34m{sanitized_temp_path}\033[1;0m")
+            # We don't delete yet as we need sr check below, but we mark for later
+            video_input_path = sanitized_temp_path
+        except subprocess.CalledProcessError as f_err:
+            print(f"\033[1;31mError: FFmpeg sanitization failed: {f_err}\033[0m")
+            return
+        except Exception as generic_err:
+            print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
+            return
+
     print(f"Loaded waveform shape: {waveform.shape}, sample rate: {sr}")
     if sr != sample_rate:
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
@@ -885,11 +905,78 @@ def sound_event_detection(args):
     with open(json_ai_path, 'w') as f:
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
     print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
-    
-    
-    '''
-    # Removed for now as the .doc template does the same. 
 
+    # --- Interactive Plotly Dashboard (Top 50 Events) ---
+    print("📊  Generating interactive Plotly dashboard…")
+    html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
+    
+    # 1. Identify top 50 classes by popularity (sum of probabilities)
+    popularity = np.sum(framewise_output, axis=0)
+    top_50_indices = np.argsort(popularity)[::-1][:50]
+    
+    # 2. Extract and optimize data (round to 4 decimals to save space)
+    times = [round(i / frames_per_second, 2) for i in range(frames_num)]
+    traces_data = []
+    for idx in top_50_indices:
+        probs = np.round(framewise_output[:frames_num, idx], 4).tolist()
+        traces_data.append({
+            "name": labels[idx],
+            "y": probs
+        })
+    
+    json_data = json.dumps({"times": times, "traces": traces_data})
+    plotly_js = pyo.get_plotlyjs()
+    
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Audio Analysis Dashboard - {base_filename_for_dir}</title>
+    <script type="text/javascript">{plotly_js}</script>
+    <style>
+        body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
+        #plot {{ width: 100%; height: 85vh; background: white; border-radius: 8px; border: 1px solid #ddd; }}
+        .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
+        code {{ background: #eee; padding: 2px 5px; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Sound Event Analysis: {base_filename_for_dir}</h1>
+        <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.csv</code></p>
+    </div>
+    <div id="plot"></div>
+    <script type="text/javascript">
+        const dataPayload = {json_data};
+        const traces = dataPayload.traces.map((t, index) => ({{
+            x: dataPayload.times,
+            y: t.y,
+            name: t.name,
+            mode: 'lines',
+            visible: index < 10 ? true : 'legendonly',
+            line: {{ width: 2 }}
+        }}));
+        const layout = {{
+            title: 'Top 50 Sound Events Momentum',
+            xaxis: {{ title: 'Seconds', gridcolor: '#eee' }},
+            yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
+            hovermode: 'x unified',
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: {{ t: 50, b: 50, l: 60, r: 20 }}
+        }};
+        Plotly.newPlot('plot', traces, layout, {{ responsive: true }});
+    </script>
+</body>
+</html>
+"""
+    with open(html_dashboard_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
+
+
+    '''
     # 2. Generate summary_manifest.json
     manifest_path = os.path.join(output_dir, 'summary_manifest.json')
     final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
@@ -902,6 +989,7 @@ def sound_event_detection(args):
             'eventogram.png': 'Visualization of the top 10 sound events over time.',
             'full_event_log.csv': 'Full probability matrix (wide format) for all 527 sound classes across all time frames.',
             'detailed_events_delta_ai_attention_friendly.json': 'A detailed map of sound events using probability deltas, optimized for AI attention mechanisms (momentum-aware).',
+            'interactive_dashboard.html': 'Interactive, self-contained Plotly dashboard for exploring the top 50 sound events with zoom and filtering.',
             os.path.basename(output_video_path): 'Video of the eventogram with original audio.',
         }
     }
@@ -911,8 +999,8 @@ def sound_event_detection(args):
     with open(manifest_path, 'w') as f:
         json.dump(artifacts, f, indent=4)
     print(f'Saved manifest JSON to: \033[1;34m{manifest_path}\033[1;0m')
-    
     '''
+
     
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
@@ -951,7 +1039,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.2.1. Recently changed: Added info about the .pth models used. output_fps = 30 standardized. Creating 'detailed_events_delta_ai_attention_friendly.json' file now. Removed summary manifest creation and checks.")
+    print(f"Eventogrammer, version 6.3.2. Recently changed:  * Added auto-sanitization of corrupt audio streams via FFmpeg. Creating 'detailed_events_delta_ai_attention_friendly.json' file now. Integrated portable interactive Plotly dashboard (Top 50). Removed creation of manifests.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
