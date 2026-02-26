@@ -41,6 +41,7 @@ import soundfile as sf
 
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
+import collections
 from scipy.stats import entropy
 import tempfile # Import tempfile for temporary file handling
 
@@ -309,11 +310,16 @@ def sound_event_detection(args):
     except Exception as e:
         print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
+
+    '''
+    #Removed for now: we do not create such manifests anymore  
     # --- Idempotency Check ---
     manifest_path = os.path.join(output_dir, 'summary_manifest.json')
     if os.path.exists(manifest_path):
         print(f"✅ Skipping {audio_path} - summary_manifest.json already exists.")
         return
+        
+        '''
 
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
@@ -555,17 +561,15 @@ def sound_event_detection(args):
     print(f'Computed left margin (px): \033[1;34m{left_margin_px}\033[1;00m, axes bbox (fig-fraction): \033[1;34m{axs[1].get_position()}\033[1;00m')
 
     with open(csv_path, 'w', newline='') as csvfile:
-        threshold = 0.2
-        #But we ignore it:
         writer = csv.writer(csvfile)
-        writer.writerow(['time', 'sound', 'probability'])
+        # Wide Format: Labels as headers to eliminate string redundancy
+        writer.writerow(['time'] + list(labels))
         for i in range(frames_num):
             timestamp = i / frames_per_second
-            for j, label in enumerate(labels):
-                prob = framewise_output[i, j]
-                #if prob > threshold:
-                writer.writerow([round(timestamp, 3), label, float(prob)])
-    print(f'Saved full framewise CSV to: \033[1;34m{csv_path}\033[1;0m')
+            # Write the timestamp followed by the full vector of 527 probabilities
+            probs = framewise_output[i, :].tolist()
+            writer.writerow([round(timestamp, 3)] + probs)
+    print(f'Saved full framewise CSV (wide matrix) to: \033[1;34m{csv_path}\033[1;0m')
 
     # Video rendering
     # Force output FPS to 30 for faster rendering and smaller files
@@ -827,6 +831,65 @@ def sound_event_detection(args):
         writer.writerows(final_sorted_events)
     print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
+    # --- Detailed AI-Friendly Event Delta Map (optimized for Attention Mechanisms) ---
+    print("📊  Generating detailed AI-friendly event delta JSON…")
+    json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
+    ai_threshold = 0.05
+    events_derivative = collections.defaultdict(list)
+
+    for label_idx, label in enumerate(labels):
+        current_event = None
+        probs_stream = framewise_output[:, label_idx]
+        
+        for frame_index, prob in enumerate(probs_stream):
+            if prob > ai_threshold:
+                if current_event is None:
+                    current_event = {
+                        "start": round(frame_index / frames_per_second, 3),
+                        "end": round(frame_index / frames_per_second, 3),
+                        "peak": float(prob),
+                        "trace": [float(prob)]
+                    }
+                else:
+                    current_event["end"] = round(frame_index / frames_per_second, 3)
+                    current_event["peak"] = max(current_event["peak"], float(prob))
+                    current_event["trace"].append(float(prob))
+            else:
+                if current_event:
+                    # Finalize event and calculate deltas
+                    tr = current_event["trace"]
+                    deltas = [tr[0]] # Anchor
+                    for i in range(1, len(tr)):
+                        deltas.append(round(tr[i] - tr[i-1], 6))
+                    
+                    events_derivative[label].append({
+                        "start_time": current_event["start"],
+                        "end_time": current_event["end"],
+                        "peak_prob": current_event["peak"],
+                        "delta_trace": deltas
+                    })
+                    current_event = None
+        
+        if current_event: # Finalize if trailing
+            tr = current_event["trace"]
+            deltas = [tr[0]]
+            for i in range(1, len(tr)):
+                deltas.append(round(tr[i] - tr[i-1], 6))
+            events_derivative[label].append({
+                "start_time": current_event["start"],
+                "end_time": current_event["end"],
+                "peak_prob": current_event["peak"],
+                "delta_trace": deltas
+            })
+
+    with open(json_ai_path, 'w') as f:
+        json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
+    print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
+    
+    
+    '''
+    # Removed for now as the .doc template does the same. 
+
     # 2. Generate summary_manifest.json
     manifest_path = os.path.join(output_dir, 'summary_manifest.json')
     final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
@@ -837,7 +900,8 @@ def sound_event_detection(args):
         'artifacts': {
             'summary_events.csv': 'A summary of the most prominent, continuous sound events, detailing their start, end, duration, and intensity.',
             'eventogram.png': 'Visualization of the top 10 sound events over time.',
-            'full_event_log.csv': 'Full, detailed log of sound event probabilities for each time frame.',
+            'full_event_log.csv': 'Full probability matrix (wide format) for all 527 sound classes across all time frames.',
+            'detailed_events_delta_ai_attention_friendly.json': 'A detailed map of sound events using probability deltas, optimized for AI attention mechanisms (momentum-aware).',
             os.path.basename(output_video_path): 'Video of the eventogram with original audio.',
         }
     }
@@ -847,6 +911,8 @@ def sound_event_detection(args):
     with open(manifest_path, 'w') as f:
         json.dump(artifacts, f, indent=4)
     print(f'Saved manifest JSON to: \033[1;34m{manifest_path}\033[1;0m')
+    
+    '''
     
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
@@ -885,7 +951,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.1.5. Recently changed:  * Always using the conversion to the aac audio codec, just in case. Using new logic for key audio events. Threshold for the filter for the 10 most popular events removed. Added info about the .pth models used. output_fps = 30 standardized.")
+    print(f"Eventogrammer, version 6.2.1. Recently changed: Added info about the .pth models used. output_fps = 30 standardized. Creating 'detailed_events_delta_ai_attention_friendly.json' file now. Removed summary manifest creation and checks.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
