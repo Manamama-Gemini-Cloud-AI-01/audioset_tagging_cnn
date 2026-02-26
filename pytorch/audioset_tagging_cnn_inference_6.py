@@ -1038,8 +1038,8 @@ if __name__ == '__main__':
 
     print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
     print(f"Note on models:")   
-    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.) 
-    print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode."
+    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
+    print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
     print()
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
