@@ -40,7 +40,7 @@ cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
 if [[ ! -f "$1" ]]; then
 #We give up
-    echo "ERROR: Input file not found at $1"
+    echo "ERROR: The input file has not been provided or has not been found at '$1' "
     exit 1
 fi
 
