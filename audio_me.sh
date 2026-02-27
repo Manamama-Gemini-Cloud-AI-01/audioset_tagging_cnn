@@ -19,11 +19,6 @@ CHECKPOINT_PATH="/storage/emulated/0/LLMs/audioset_tagging_cnn/Cnn14_DecisionLev
 
 fi
 
-if [[ ! -f "$1" ]]; then
-#We give up
-    echo "ERROR: Input file not found at $1"
-    exit 1
-fi
 
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
 #We give up
@@ -42,6 +37,13 @@ echo "Note: If you see errors with sox / mp3 parsing → install sox + libsox-fm
 echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
 
 cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
+
+if [[ ! -f "$1" ]]; then
+#We give up
+    echo "ERROR: Input file not found at $1"
+    exit 1
+fi
+
 
 
 # Run inference with dynamic eventogram 
