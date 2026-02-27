@@ -21,6 +21,16 @@ fi
 
 
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
+#Maybe local? 
+
+CHECKPOINT_PATH="$HOME/Downloads/GitHub/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth"
+
+
+fi
+
+
+
+if [[ ! -f "$CHECKPOINT_PATH" ]]; then
 #We give up
     echo "ERROR: Checkpoint not found at $CHECKPOINT_PATH"
     exit 1
