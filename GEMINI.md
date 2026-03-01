@@ -1,13 +1,20 @@
-# Technical Documentation: `audioset_tagging_cnn_inference_6.py`
+# Technical Documentation
 
-**Version:** 6.3.5
+
+
+
+
 **Source:** Adapted from the original PANNs repository: https://github.com/qiuqiangkong/audioset_tagging_cnn
 
 ## 1. Overview
 
-This script is a heavily modified inference tool for the PANNs (Pretrained Audio Neural Networks) models. Its primary function is to perform **sound event detection (SED)** on the audio track of any given media file (video or audio-only). It identifies what sounds are present at any given moment and generates a series of outputs, including data files and video visualizations.
+The main script is `audioset_tagging_cnn_inference_6.py` one. This script is a heavily modified inference tool for the PANNs (Pretrained Audio Neural Networks) models. Its primary function is to perform **sound event detection (SED)** on the audio track of any given media file (video or audio-only). It identifies what sounds are present at any given moment and generates a series of outputs, including data files and video visualizations.
 
 The core of the script is its ability to take a pretrained model, feed it an audio waveform, and produce a time-stamped probability matrix of the 527 sound classes from the AudioSet ontology.
+
+
+
+Also there are other experiments here, e.g. /audioset_tagging_cnn/scripts/Shapash_visualization oe. 
 
 ## 2. Core Dependencies
 
