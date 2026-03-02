@@ -796,12 +796,13 @@ def sound_event_detection(args):
         f.write(html_content)
     print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
 
+    """
     # Auto-open the dashboard using the system 'open' command
     try:
         subprocess.run(['open', html_dashboard_path], check=False)
     except Exception as e:
         print(f"Warning: Could not auto-open dashboard: {e}")
-
+    """
 
     
 
