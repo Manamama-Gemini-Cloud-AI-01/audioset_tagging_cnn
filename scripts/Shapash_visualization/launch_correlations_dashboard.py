@@ -20,8 +20,20 @@ def main():
         print(f"Error: File not found: {args.csv_path}")
         return
 
+    # Basic extension check to prevent binary file reading errors
+    if not args.csv_path.lower().endswith('.csv'):
+        print(f"Error: This script expects a CSV file (e.g., full_event_log.csv).")
+        if args.csv_path.lower().endswith(('.mp3', '.wav', '.mp4', '.m4a', '.webm')):
+            print(f"Hint: You provided a media file. You must run inference FIRST to generate the CSV.")
+            print(f"Example: python3 pytorch/audioset_tagging_cnn_inference_6.py \"{args.csv_path}\" ...")
+        return
+
     print("loading " + args.csv_path)
-    df = pd.read_csv(args.csv_path)
+    try:
+        df = pd.read_csv(args.csv_path)
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+        return
 
     # 3. Target Selection
     sounds_only = df.drop(columns=["time"])

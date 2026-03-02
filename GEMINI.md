@@ -64,7 +64,7 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 
 3. **Data Export:**
    
-   *   `full_event_log.csv`: A detailed CSV file (wide matrix format) logging every detected sound event probability for every time frame.
+   *   `full_event_log.csv`: A detailed CSV file (wide matrix format) logging every detected sound event probability for every time frame. This is the **primary input** for the Shapash dashboard.
    
    *   `summary_events.csv`: A user-friendly summary that identifies continuous blocks of sound events.
    
@@ -74,7 +74,15 @@ The script operates in a single mode: `sound_event_detection`. The process is as
    
    *   `summary_manifest.json`: A JSON file cataloging all the generated artifacts.
 
-## 4. Model Performance & Personality Analysis
+## 4. Shapash Correlations Dashboard
+
+Located at `scripts/Shapash_visualization/launch_correlations_dashboard.py`, this tool provides a deep-dive into acoustic correlations. It uses a Random Forest regressor to explain why a specific sound was detected by looking at the presence of other sounds as features.
+
+**Workflow:**
+1.  **Step 1 (Inference):** Run `pytorch/audioset_tagging_cnn_inference_6.py` on your audio/video file.
+2.  **Step 2 (Visualization):** Run `launch_correlations_dashboard.py` on the resulting `full_event_log.csv`.
+
+## 5. Model Performance & Personality Analysis
 
 Based on cross-model comparison tests (e.g., "duck chase" and "marketing hall" recordings), the available PANNs models exhibit distinct behaviors:
 
