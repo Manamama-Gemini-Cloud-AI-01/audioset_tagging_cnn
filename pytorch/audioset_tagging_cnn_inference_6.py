@@ -25,7 +25,7 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-#Torch and torchaudio must be ==2.8 for now, avoid for a while: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
+#Torch and torchaudio and coverage are version sensitive. Careful with: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
 
 import torch
 import torchaudio
@@ -1050,7 +1050,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.3.4. Recently changed:  * Fixed path bug in output directory naming. Added auto-sanitization of corrupt audio streams via FFmpeg. Integrated portable interactive Plotly dashboard (Top 50). Removed manifest generation. Added a static_eventogram argument. Reorder artifact creation logic.")
+    print(f"Eventogrammer, version 6.4.1. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
@@ -1065,6 +1065,8 @@ if __name__ == '__main__':
     print()
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
+    print(f"Using coverage version: {coverage.__version__}")
+    
 
     print(f"")
 

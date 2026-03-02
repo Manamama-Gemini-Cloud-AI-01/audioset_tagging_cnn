@@ -62,7 +62,7 @@ The script operates in a single mode: `sound_event_detection`. The process is as
    
    *   `summary_events.csv`: A user-friendly summary that identifies continuous blocks of sound events.
    
-   *   `detailed_events_delta_ai_attention_friendly.json`: A momentum-aware map of sound events using probability deltas, specifically optimized for AI attention mechanisms to detect 'attacks', 'decays', and performance dynamics.
+   *   `detailed_events_delta_ai_attention_friendly.json`: A momentum-aware map of sound events using probability deltas, specifically optimized for AI attention mechanisms. It uses **Run-Length Encoding (RLE)** to collapse periods of steady-state audio into `{"skip": N}` markers, making it significantly more token-efficient for AI readers. It is the primary tool for forensic analysis of **attacks**, **decays**, and **rhythm**.
    
    *   `interactive_dashboard.html`: A self-contained, portable Plotly dashboard for exploring the top 50 sound events with zoom and filtering.
    
@@ -107,7 +107,17 @@ Based on cross-model comparison tests (e.g., "duck chase" and "marketing hall" r
 * **The 16k Model:** Requires strict 16kHz/512 window configuration; currently incompatible with the 32kHz pipeline.
 * **Sensitivity Thresholding:** PANNs is fundamentally a "Change Detector." The **Detailed Delta JSON** is recommended for distinguishing between biological sources and human imitation (performance).
 
-## 5. Key Technical Details
+### 5. Pragmatic Interpretation: Acoustic Metaphors
+Because the model was trained on diverse web audio, it often uses "semantic metaphors" to describe sounds it doesn't have a specific label for. The **Detailed Delta JSON** allows an analyst to look past the label and see the **physical signature**:
+
+*   **"Horse/Clip-clop"** → Rhythmic high-heel footsteps on hard pavement.
+*   **"Printer/Vacuum"** → The whirring of grinders or the pulsing of pumps in industrial machines (e.g., coffee makers).
+*   **"Thunder/Rain"** → Microphone handling noise, cable friction, or wind hitting the device.
+*   **"Animal"** → The rhythmic locomotion of the person carrying the recording device.
+
+By analyzing the **Deltas** (Attack/Decay) and **Skips** (Steady state), an AI or human can perform "Acoustic Archeology" to reconstruct the physical reality of the scene.
+
+## 6. Key Technical Details
 
 - **Execution Context:** The script MUST be run from the project's root directory, as it relies on relative paths to load configuration files (e.g., `config.py` which points to the class labels CSV).
 - **Eventogram X-Axis Alignment:** The alignment of the animated marker with the static eventogram image is achieved by dynamically calculating the plot's left margin based on the pixel width of the y-axis labels, and then using those same fractional coordinates to guide the marker's animation. This ensures perfect synchronization.
