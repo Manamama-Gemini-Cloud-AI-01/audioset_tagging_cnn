@@ -38,6 +38,7 @@ import moviepy
 import warnings
 import platform
 import soundfile as sf
+#import coverage 
 
 from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
 import json
@@ -1065,7 +1066,7 @@ if __name__ == '__main__':
     print()
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
-    print(f"Using coverage version: {coverage.__version__}")
+    #print(f"Using coverage version: {coverage.__version__}")
     
 
     print(f"")
