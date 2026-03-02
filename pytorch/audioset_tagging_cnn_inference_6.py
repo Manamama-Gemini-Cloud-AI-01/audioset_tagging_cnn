@@ -656,10 +656,26 @@ def sound_event_detection(args):
     print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
     # --- Detailed AI-Friendly Event Delta Map (optimized for Attention Mechanisms) ---
-    print("📊  Generating detailed AI-friendly event delta JSON…")
+    print("📊  Generating detailed AI-friendly event delta JSON (with RLE compression)…")
     json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
     ai_threshold = 0.05
     events_derivative = collections.defaultdict(list)
+
+    def zip_trace(trace):
+        """Compress trace by replacing consecutive zeros with a skip marker."""
+        zipped = []
+        zero_count = 0
+        for val in trace:
+            if val == 0.0:
+                zero_count += 1
+            else:
+                if zero_count > 0:
+                    zipped.append({"skip": zero_count})
+                    zero_count = 0
+                zipped.append(val)
+        if zero_count > 0:
+            zipped.append({"skip": zero_count})
+        return zipped
 
     for label_idx, label in enumerate(labels):
         current_event = None
@@ -690,7 +706,7 @@ def sound_event_detection(args):
                         "start_time": current_event["start"],
                         "end_time": current_event["end"],
                         "peak_prob": current_event["peak"],
-                        "delta_trace": deltas
+                        "delta_trace": zip_trace(deltas)
                     })
                     current_event = None
         
@@ -703,12 +719,12 @@ def sound_event_detection(args):
                 "start_time": current_event["start"],
                 "end_time": current_event["end"],
                 "peak_prob": current_event["peak"],
-                "delta_trace": deltas
+                "delta_trace": zip_trace(deltas)
             })
 
     with open(json_ai_path, 'w') as f:
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
-    print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
+    print(f'Saved AI-friendly delta JSON (compressed) to: \033[1;34m{json_ai_path}\033[1;0m')
 
     # --- Interactive Plotly Dashboard (Top 50 Events) ---
     print("📊  Generating interactive Plotly dashboard…")
@@ -778,6 +794,12 @@ def sound_event_detection(args):
     with open(html_dashboard_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
     print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
+
+    # Auto-open the dashboard using the system 'open' command
+    try:
+        subprocess.run(['open', html_dashboard_path], check=False)
+    except Exception as e:
+        print(f"Warning: Could not auto-open dashboard: {e}")
 
 
     

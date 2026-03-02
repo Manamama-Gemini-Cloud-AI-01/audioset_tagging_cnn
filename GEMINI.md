@@ -1,18 +1,12 @@
 # Technical Documentation
 
-
-
-
-
 **Source:** Adapted from the original PANNs repository: https://github.com/qiuqiangkong/audioset_tagging_cnn
 
 ## 1. Overview
 
-The main script is `audioset_tagging_cnn_inference_6.py` one. This script is a heavily modified inference tool for the PANNs (Pretrained Audio Neural Networks) models. Its primary function is to perform **sound event detection (SED)** on the audio track of any given media file (video or audio-only). It identifies what sounds are present at any given moment and generates a series of outputs, including data files and video visualizations.
+The main script is `audioset_tagging_cnn_inference_6.py` one. This script is a heavily modified inference tool for the PANNs (Pretrained Audio Neural Networks) models, which primary function is to perform **sound event detection (SED)** on the audio track of any given media file. It identifies what sounds are present at any given moment and generates a series of outputs, including data files and video visualizations.
 
 The core of the script is its ability to take a pretrained model, feed it an audio waveform, and produce a time-stamped probability matrix of the 527 sound classes from the AudioSet ontology.
-
-
 
 Also there are other experiments here, e.g. /audioset_tagging_cnn/scripts/Shapash_visualization oe. 
 
@@ -79,8 +73,9 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 Located at `scripts/Shapash_visualization/launch_correlations_dashboard.py`, this tool provides a deep-dive into acoustic correlations. It uses a Random Forest regressor to explain why a specific sound was detected by looking at the presence of other sounds as features.
 
 **Workflow:**
-1.  **Step 1 (Inference):** Run `pytorch/audioset_tagging_cnn_inference_6.py` on your audio/video file.
-2.  **Step 2 (Visualization):** Run `launch_correlations_dashboard.py` on the resulting `full_event_log.csv`.
+
+1. **Step 1 (Inference):** Run `pytorch/audioset_tagging_cnn_inference_6.py` on your audio/video file.
+2. **Step 2 (Visualization):** Run `launch_correlations_dashboard.py` on the resulting `full_event_log.csv`.
 
 ## 5. Model Performance & Personality Analysis
 

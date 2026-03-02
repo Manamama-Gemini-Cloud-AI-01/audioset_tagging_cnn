@@ -4,6 +4,7 @@ from sklearn.ensemble import RandomForestRegressor
 from shapash import SmartExplainer
 import os
 import argparse
+import subprocess
 
 def main():
     # 1. Setup Command Line Arguments
@@ -107,6 +108,14 @@ def main():
     print("DASHBOARD STARTING (Explaining " + str(target) + ")...")
     print("Open your browser at: http://localhost:8050")
     print("--------------------------------------------------")
+
+    # Auto-open the local server using the system 'open' command in background
+    try:
+        # We use a background shell command with sleep to give the server a moment to start
+        subprocess.Popen('sleep 2 && open http://localhost:8050', shell=True)
+    except Exception as e:
+        print(f"Warning: Could not auto-open browser: {e}")
+
     app.run(debug=False, host="0.0.0.0", port=8050)
 
 if __name__ == "__main__":

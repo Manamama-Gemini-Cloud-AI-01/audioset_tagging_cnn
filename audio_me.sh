@@ -48,20 +48,40 @@ echo "Note: Paths provided as command-line arguments should be absolute to avoid
 
 cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
-if [[ ! -f "$1" ]]; then
+INPUT_FILE=$(realpath "$1")
+
+if [[ ! -f "$INPUT_FILE" ]]; then
 #We give up
-    echo "ERROR: The input file has not been provided or has not been found at '$1' "
+    echo "ERROR: The input file has not been provided or has not been found at '$INPUT_FILE' "
     exit 1
 fi
 
 
 
-# Run inference with dynamic eventogram 
-time python $HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py \
+# Run inference
+time python "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \
     --cuda \
     "$@"    
 
+# --- STREAMLINING: Auto-launch Shapash Dashboard ---
+
+INPUT_FILENAME=$(basename "$INPUT_FILE" | sed 's/\.[^.]*$//')
+CHECKPOINT_FILENAME=$(basename "$CHECKPOINT_PATH")
+INPUT_DIR=$(dirname "$INPUT_FILE")
+
+# Reconstruct the output directory path (must match Python logic)
+OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
+CSV_PATH="${OUTPUT_DIR}/full_event_log.csv"
+
+if [[ -f "$CSV_PATH" ]]; then
+    echo
+    echo "📊  Inference complete. Launching Shapash Correlations Dashboard..."
+    python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
+else
+    echo
+    echo "⚠️  Warning: full_event_log.csv not found at $CSV_PATH. Skipping dashboard."
+fi
 
 echo
