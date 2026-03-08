@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 
 import torch
 import torchaudio
+import torchcodec
 # AI ARCHITECTURAL NOTE: torchaudio is essential for:
 # 1. High-level Decoding/Normalization/Resampling to 32kHz (fixed model rate).
 # 2. GPU/CUDA efficiency on large files.
@@ -1058,7 +1059,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.4.1. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
+    print(f"Eventogrammer, version 6.4.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
