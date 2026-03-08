@@ -70,8 +70,6 @@ exec "$@"
 EOF
 chmod +x "$WRAP_SH"
 
-"$WRAP_SH" valgrind --tool=massif --stacks=yes --detailed-freq=1 \
-  python pytorch/audioset_tagging_cnn_inference_6.py yourfile.mp3
   
   
 "$WRAP_SH" valgrind --tool=massif --stacks=yes --detailed-freq=1  python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
