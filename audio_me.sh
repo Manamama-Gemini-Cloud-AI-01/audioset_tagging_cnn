@@ -65,7 +65,7 @@ echo val, version 1.1
 WRAP_SH=$(mktemp)
 cat > "$WRAP_SH" << 'EOF'
 #!/system/bin/sh
-setprop debug.malloc.tagged 0
+sudo setprop debug.malloc.tagged 0
 exec "$@"
 EOF
 chmod +x "$WRAP_SH"
