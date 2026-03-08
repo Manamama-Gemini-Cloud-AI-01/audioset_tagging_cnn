@@ -64,6 +64,26 @@ from models import *
 from pytorch_utils import move_data_to_device
 import config
 
+import psutil
+
+def check_memory_safety(min_available_mb=800):
+    """Return True if safe to continue, False if too low."""
+    avail_mb = psutil.virtual_memory().available / (1024 * 1024)
+    swap_used_mb = psutil.swap_memory().used / (1024 * 1024)
+    print(f"Memory check: available {avail_mb:.0f} MB | swap used {swap_used_mb:.0f} MB")
+    
+    if avail_mb < min_available_mb:
+        print(f"\033[1;31mCRITICAL: Available RAM too low ({avail_mb:.0f} MB < {min_available_mb} MB). Aborting this chunk.\033[0m")
+        return False
+    if swap_used_mb > 6000:  # adjust to your total swap (e.g. 9 GB → warn at ~6 GB used)
+        print(f"\033[1;33mWARNING: Swap filling up ({swap_used_mb:.0f} MB used). Consider pausing.\033[0m")
+    return True
+    
+    
+    
+
+
+
 def is_video_file(audio_path):
     try:
         result = subprocess.run(
@@ -254,6 +274,12 @@ def audio_tagging(args):
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
     waveform = waveform.mean(dim=0, keepdim=True)  # Convert to mono
     waveform = waveform[None, :]  # Shape: [1, samples] for model input
+    
+    
+    if not check_memory_safety(min_available_mb=1000):  # 1 GB safety margin
+    print(f"Skipping remaining chunks due to memory pressure.")
+    break  # or continue, or sys.exit(1) if you want to stop entirely
+    
     waveform = move_data_to_device(waveform, device)
 
     with torch.no_grad():
@@ -1059,7 +1085,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.4.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
+    print(f"Eventogrammer, version 6.5.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added info about Droid tricks. Psutil checks against OOM.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
