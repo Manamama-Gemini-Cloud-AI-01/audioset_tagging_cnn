@@ -1061,12 +1061,7 @@ if __name__ == '__main__':
     print(f"Eventogrammer, version 6.4.1. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
-    print("\033[1;33m" + "="*60)
-    print("ANDROID PLATFORM HACK (torchcodec) REMINDER:")
-    print("If you see 'NotImplementedError: sys.platform = android' after an update:")
-    print("1. Edit: /data/data/com.termux/files/usr/lib/python3.13/site-packages/torchcodec/_internally_replaced_utils.py")
-    print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
-    print("="*60 + "\033[0m")
+
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
@@ -1074,13 +1069,25 @@ if __name__ == '__main__':
     print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path} -c copy -f segment -segment_time 1200 output_%03d.mp4")
     
 
+ 
     print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
-    print(f"Note on models:")   
+    print(f"Note on the  models:")   
     print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
     print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
     print()
+
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
+    print(f"Using torchcodec version: {torchcodec.__version__}")
+
+    print("ANDROID PLATFORM HACK (torchcodec) REMINDER:")
+    print("If you see 'NotImplementedError: sys.platform = android' after an update:")
+
+    print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchcodec/_internally_replaced_utils.py")
+    print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
+    
     #print(f"Using coverage version: {coverage.__version__}")
     
 
