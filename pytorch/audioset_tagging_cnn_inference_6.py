@@ -1066,7 +1066,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.5.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added info about Droid tricks. Psutil checks against OOM.")
+    print(f"Eventogrammer, version 6.5.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added info about Droid tricks. Warning against OOM on Android.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
@@ -1090,8 +1090,8 @@ if __name__ == '__main__':
     print(f"Using torchaudio version: {torchaudio.__version__}")
     print(f"Using torchcodec version: {torchcodec.__version__}")
 
-    print("ANDROID PLATFORM HACK (torchcodec) REMINDER:")
-    print("If you see 'NotImplementedError: sys.platform = android' after an update:")
+    print("ANDROID PLATFORM REMINDER:")
+    print("It OOMs in Termux, so just do not try. See chat https://grok.com/c/560a2d80-dd45-4951-9d89-ea14f1a7f6d2?rid=c3dda9e6-63ac-42f4-9527-c56398ef07f8 for details why. If you see 'NotImplementedError: sys.platform = android' after an update:")
 
     print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchcodec/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
