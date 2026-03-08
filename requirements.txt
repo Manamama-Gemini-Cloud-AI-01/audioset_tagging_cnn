@@ -3,4 +3,5 @@ soundfile
 librosa
 torch
 torchlibrosa
-
+moviepy
+h5py

@@ -29,6 +29,12 @@ import matplotlib.pyplot as plt
 
 import torch
 import torchaudio
+# AI ARCHITECTURAL NOTE: torchaudio is essential for:
+# 1. High-level Decoding/Normalization/Resampling to 32kHz (fixed model rate).
+# 2. GPU/CUDA efficiency on large files.
+# 3. Direct Tensor-land processing to minimize NumPy/Memory overhead in Termux.
+# If torchaudio.load fails on Android, prefer the 'android=linux' torchcodec hack
+# over full library replacement to preserve these architectural benefits.
 import csv
 import datetime
 import time
@@ -1053,6 +1059,14 @@ if __name__ == '__main__':
     output_fps = 25
 
     print(f"Eventogrammer, version 6.4.1. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added check for coverage package version.")
+    
+    # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
+    print("\033[1;33m" + "="*60)
+    print("ANDROID PLATFORM HACK (torchcodec) REMINDER:")
+    print("If you see 'NotImplementedError: sys.platform = android' after an update:")
+    print("1. Edit: /data/data/com.termux/files/usr/lib/python3.13/site-packages/torchcodec/_internally_replaced_utils.py")
+    print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
+    print("="*60 + "\033[0m")
 
  
     print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
