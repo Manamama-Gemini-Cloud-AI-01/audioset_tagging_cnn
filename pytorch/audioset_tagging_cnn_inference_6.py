@@ -274,7 +274,10 @@ def audio_tagging(args):
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
     waveform = waveform.mean(dim=0, keepdim=True)  # Convert to mono
     waveform = waveform[None, :]  # Shape: [1, samples] for model input
-    
+    #Added as OOM experiment: 
+    model = model.half()
+    print("Model in float16 — lower activation memory")
+    waveform = waveform.half()  # after unsqueeze
     
     if not check_memory_safety(min_available_mb=2000):  # 2 GB safety margin
         raise MemoryError("Available RAM too low for full-file inference. Abort.")
