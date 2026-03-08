@@ -276,7 +276,7 @@ def audio_tagging(args):
     waveform = waveform[None, :]  # Shape: [1, samples] for model input
     
     
-    if not check_memory_safety(min_available_mb=1000):  # 1 GB safety margin
+    if not check_memory_safety(min_available_mb=2000):  # 2 GB safety margin
         raise MemoryError("Available RAM too low for full-file inference. Abort.")
     
     waveform = move_data_to_device(waveform, device)
