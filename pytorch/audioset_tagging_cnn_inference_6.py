@@ -277,8 +277,8 @@ def audio_tagging(args):
     
     
     if not check_memory_safety(min_available_mb=1000):  # 1 GB safety margin
-    print(f"Skipping remaining chunks due to memory pressure.")
-    break  # or continue, or sys.exit(1) if you want to stop entirely
+        print(f"Skipping remaining chunks due to memory pressure.")
+        break  # or continue, or sys.exit(1) if you want to stop entirely
     
     waveform = move_data_to_device(waveform, device)
 
