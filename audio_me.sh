@@ -46,6 +46,8 @@ echo
 echo "Note: If you see errors with sox / mp3 parsing → install sox + libsox-fmt-mp3, test it via 'sox --info "$@" ' "
 echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
 
+echo "Note: if no torchaudio backends, do find a patch file, usually called speechbrain.patch, and patch speechbrain itself. " 
+
 cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
 INPUT_FILE=$(realpath "$1")
