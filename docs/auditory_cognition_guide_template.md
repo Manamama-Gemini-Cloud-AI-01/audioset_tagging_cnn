@@ -38,6 +38,13 @@ Do begin by consulting the filenames and the primary data logs.
   * **Acoustic Archeology:** The model is often more sensitive to "Speech" than transcribers like Whisper. If Step 1.2 flags "Speech" but Whisper fails to find words, it likely indicates **remote chatter** (e.g., 20m away) where texture is present but phonemes are lost.
   * **Mechanical Swells:** Large machines (Trains, Trams) show **gradual momentum**—the deltas rise sequentially as the object approaches (Doppler effect).
 
+* **Step 1.6: Acoustic Correlation Analysis (Shapash Brain)**
+  
+  * **File:** `shapash_brain_<target_class>.pkl`
+  * **Action:** This file contains the "Acoustic DNA" of a detection. It explains **"The Why"** by showing which other sounds are mathematically correlated with the target label.
+  * **Forensic Utility:** Use this to debunk **Acoustic Hallucinations**. 
+  * **Example:** If the model flags a "Thunderstorm," check the Shapash predictors. If they are "Rain" and "Thunder," the detection has high acoustic integrity. If the top predictors are "Whirring," "Rumble," and "Mechanical," the model is likely using a metaphor for a **Machine** (e.g., a coffee maker or industrial pump).
+
 ---
 
 ## 2. The "How to See" Workflow for Visual Context
@@ -116,6 +123,7 @@ The standard output of the `audioset_tagging_cnn` script includes the following 
 * `summary_events.csv`: A summary of prominent, continuous sound events.
 * `full_event_log.csv`: A detailed matrix of sound event probabilities for every time frame.
 * `detailed_events_delta_ai_attention_friendly.json`: Detailed event intervals with delta traces for momentum analysis.
+* `shapash_brain_*.pkl`: A precomputed "Acoustic Brain" explaining the correlations for a specific sound class (e.g., why it thinks it's a "Cricket").
 * `eventogram.png`: A static visualization of the top 10 sound events over time.
 * `*_eventogram_dynamic.mp4`: A video of the eventogram with the original audio.
 * `*_eventogram_dynamic_overlay.mp4`: The original video with the eventogram visualization overlaid.
