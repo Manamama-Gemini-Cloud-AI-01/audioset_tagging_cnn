@@ -544,30 +544,44 @@ def sound_event_detection(args):
     frames_num = len(framewise_output)
     
     print(f'Aggregation complete. Internal RAM resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
-    left_frac = 0.08   # ← ADD THIS LINE  (or 0.05–0.1, it controls left margin for y-labels)       
     # Static PNG visualization
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_k = 10
     top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
+    top_labels = np.array(labels)[sorted_indexes[0:top_k]]
 
     fig_width_px = 1280
     fig_height_px = 480
     dpi = 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
     
-    #Manually added as Gemini AI removed too much, see https://github.com/Manamama-Gemini-Cloud-AI-01/audioset_tagging_cnn/commit/ef86ff73358738fdc574760b0dc09861cf41fc6e#diff-3e236fb7743cdfdcc5b24001492a8ffb617084e752dab31bb68a89d5462385bb version how it used to be: 
+    # 1. First Pass: Create plot to measure Y-axis label widths
+    gs_init = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=0.1, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+    axs_init = [fig.add_subplot(gs_init[0]), fig.add_subplot(gs_init[1])]
+    axs_init[1].set_yticks(np.arange(0, top_k))
+    axs_init[1].set_yticklabels(top_labels, fontsize=14)
+    fig.canvas.draw()
+    
+    renderer = fig.canvas.get_renderer()
+    max_label_width_px = 0
+    for lbl in axs_init[1].yaxis.get_majorticklabels():
+        bbox = lbl.get_window_extent(renderer=renderer)
+        w = bbox.width
+        if w > max_label_width_px:
+            max_label_width_px = w
+
     pad_px = 8
     left_margin_px = int(max_label_width_px + pad_px + 6)
     fig_w_in = fig.get_size_inches()[0]
     fig_w_px = fig_w_in * dpi
     left_frac = left_margin_px / fig_w_px
-    if left_frac < 0:
-        left_frac = 0.0
-    if left_frac > 0.45:
-        left_frac = 0.45
-        
-        
-    # Use the downsampled indices for the plot
+    if left_frac < 0: left_frac = 0.0
+    if left_frac > 0.45: left_frac = 0.45
+    
+    # 2. Second Pass: Final Render with correct dynamic margin
+    fig.clear()
+    print(f'Computed left margin: \033[1;34m{left_margin_px}px\033[1;0m (frac: {left_frac:.3f})')
+    
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
     axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
 
@@ -583,7 +597,6 @@ def sound_event_detection(args):
     axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num)
     
-    top_labels = np.array(labels)[sorted_indexes[0:top_k]]
     axs[1].set_yticks(np.arange(0, top_k))
     axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
@@ -904,15 +917,6 @@ def sound_event_detection(args):
                 ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
 
             fig.canvas.draw()
-            renderer = fig.canvas.get_renderer()
-            max_label_width_px = 0
-            for lbl in axs[1].yaxis.get_majorticklabels():
-                bbox = lbl.get_window_extent(renderer=renderer)
-                w = bbox.width
-                if w > max_label_width_px:
-                    max_label_width_px = w
-                    
-            
             img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
             img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
             plt.close(fig)
