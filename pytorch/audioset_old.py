@@ -474,88 +474,92 @@ def sound_event_detection(args):
 
     chunk_duration = 180  # 3 minutes
     chunk_samples = int(chunk_duration * sample_rate)
+    framewise_outputs = []
     
-    # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
-    vis_fps = 2  # Target 2 FPS for visualization as suggested
-    frames_per_second = sample_rate // hop_size
-    vis_downsample = frames_per_second // vis_fps
-    
-    framewise_vis_list = []
-    stft_vis_list = []
-    
-    print(f"📊  Processing in {chunk_duration/60}m chunks. CSV: {frames_per_second} FPS | RAM/Vis: {vis_fps} FPS")
-
-    with open(csv_path, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['time'] + list(labels))
+    for start in range(0, len(waveform), chunk_samples):
+        chunk = waveform[start:start + chunk_samples]
+        if len(chunk) < sample_rate // 10:
+            print(f"Skipping small chunk at start={start}, len={len(chunk)}")
+            continue
+        chunk = chunk[None, :]  # Shape: [1, samples]
+        chunk = move_data_to_device(torch.from_numpy(chunk).float(), device)
+        print(f"Processing chunk: start={start}, len={len(chunk)}")
         
-        for start in range(0, len(waveform), chunk_samples):
-            chunk = waveform[start:start + chunk_samples]
-            if len(chunk) < sample_rate // 10:
+        with torch.no_grad():
+            model.eval()
+            try:
+                batch_output_dict = model(chunk, None)
+                framewise_output_chunk = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
+                print(f"Chunk output shape: {framewise_output_chunk.shape}")
+                framewise_outputs.append(framewise_output_chunk)
+            except Exception as e:
+                print(f"\033[1;31mError processing chunk at start={start}: {e}\033[0m")
                 continue
-            
-            # 1. Inference
-            chunk_tensor = move_data_to_device(torch.from_numpy(chunk[None, :]).float(), device)
-            with torch.no_grad():
-                model.eval()
-                try:
-                    batch_output_dict = model(chunk_tensor, None)
-                    chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
-                except Exception as e:
-                    print(f"\033[1;31mError in chunk at {start}: {e}\033[0m")
-                    continue
-            
-            # 2. Stream downsampled CSV - keeps ALL classes but makes file ~20x smaller
-            chunk_start_time = start / sample_rate
-            csv_downsample = max(1, frames_per_second // args.csv_fps)  # e.g. 100//5 = 20
-            for i in range(0, len(chunk_out), csv_downsample):
-                timestamp = chunk_start_time + (i / frames_per_second)
-                writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
-            
-            # 3. Downsample for RAM-based Visualization (Max-Pool to preserve peaks)
-            # We use max-pooling so we don't miss short sound events in the graph
-            for i in range(0, len(chunk_out), vis_downsample):
-                vis_slice = chunk_out[i : i + vis_downsample]
-                if len(vis_slice) > 0:
-                    framewise_vis_list.append(np.max(vis_slice, axis=0))
-
-            # 4. Chunked STFT for Visualization
-            chunk_tensor_stft = torch.from_numpy(chunk).to(device)
-            chunk_stft = torch.stft(
-                chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
-                window=torch.hann_window(window_size).to(device),
-                center=True, return_complex=True
-            ).abs().cpu().numpy()
-            
-            # Downsample STFT columns
-            stft_vis_list.append(chunk_stft[:, ::vis_downsample])
-            
-            print(f"Chunk at {int(chunk_start_time/60)}m done. RAM usage: {len(framewise_vis_list)} vis-frames cached.")
-
-    # 5. Global Aggregation (Lean)
-    framewise_output = np.array(framewise_vis_list) # Rename for compatibility with subsequent blocks
-    stft = np.concatenate(stft_vis_list, axis=1) # Correctly concatenate STFT chunks
-    del framewise_vis_list
-    del stft_vis_list
-    del waveform
     
-    # Update frame metadata for downsampled resolution
-    frames_per_second = vis_fps 
-    frames_num = len(framewise_output)
+    if not framewise_outputs:
+        print("\033[1;31mError: No valid chunks processed. Cannot generate eventogram.\033[0m")
+        return
     
-    print(f'Aggregation complete. Internal RAM resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
-    left_frac = 0.08   # ← ADD THIS LINE  (or 0.05–0.1, it controls left margin for y-labels)       
+    framewise_output = np.concatenate(framewise_outputs, axis=0)
+    print(f'Sound event detection result (time_steps x classes_num): \033[1;34m{framewise_output.shape}\033[1;0m')
+
+    frames_per_second = sample_rate // hop_size
+    waveform_tensor = torch.from_numpy(waveform).to(device)
+    stft = torch.stft(
+        waveform_tensor,
+        n_fft=window_size,
+        hop_length=hop_size,
+        window=torch.hann_window(window_size).to(device),
+        center=True,
+        return_complex=True
+    )
+    stft = stft.abs().cpu().numpy()
+    frames_num = int(duration * frames_per_second)
+    
+    if framewise_output.shape[0] < frames_num:
+        pad_width = frames_num - framewise_output.shape[0]
+        framewise_output = np.pad(framewise_output, ((0, pad_width), (0, 0)), mode='constant')
+    
     # Static PNG visualization
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_k = 10
-    top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
+    top_result_mat = framewise_output[:frames_num, sorted_indexes[0:top_k]]
 
     fig_width_px = 1280
     fig_height_px = 480
     dpi = 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
+
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=0.0, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+    axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
+
+    axs[0].matshow(np.log(stft + 1e-10), origin='lower', aspect='auto', cmap='jet')
+    axs[0].set_ylabel('Frequency bins', fontsize=14)
+    axs[0].set_title('Spectrogram and Eventogram', fontsize=14)
+    axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+
+    tick_interval = max(5, int(duration / 20))
+    x_ticks = np.arange(0, frames_num + 1, frames_per_second * tick_interval)
+    x_labels = np.arange(0, int(duration) + 1, tick_interval)
+    axs[1].xaxis.set_ticks(x_ticks)
+    axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
+    axs[1].set_xlim(0, frames_num)
+    top_labels = np.array(labels)[sorted_indexes[0:top_k]]
+    axs[1].set_yticks(np.arange(0, top_k))
+    axs[1].set_yticklabels(top_labels, fontsize=14)
+    axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+    axs[1].set_xlabel('Seconds', fontsize=14)
+    axs[1].xaxis.set_ticks_position('bottom')
     
-    #Manually added as Gemini AI removed too much, see https://github.com/Manamama-Gemini-Cloud-AI-01/audioset_tagging_cnn/commit/ef86ff73358738fdc574760b0dc09861cf41fc6e#diff-3e236fb7743cdfdcc5b24001492a8ffb617084e752dab31bb68a89d5462385bb version how it used to be: 
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    max_label_width_px = 0
+    for lbl in axs[1].yaxis.get_majorticklabels():
+        bbox = lbl.get_window_extent(renderer=renderer)
+        w = bbox.width
+        if w > max_label_width_px:
+            max_label_width_px = w
+
     pad_px = 8
     left_margin_px = int(max_label_width_px + pad_px + 6)
     fig_w_in = fig.get_size_inches()[0]
@@ -565,34 +569,38 @@ def sound_event_detection(args):
         left_frac = 0.0
     if left_frac > 0.45:
         left_frac = 0.45
-        
-        
-    # Use the downsampled indices for the plot
+
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+    fig.clear()
     axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
 
     axs[0].matshow(np.log(stft + 1e-10), origin='lower', aspect='auto', cmap='jet')
     axs[0].set_ylabel('Frequency bins', fontsize=14)
-    axs[0].set_title('Spectrogram and Eventogram', fontsize=14)
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
-
-    tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
-    x_labels = np.arange(0, int(duration) + 1, tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
     axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num)
-    
-    top_labels = np.array(labels)[sorted_indexes[0:top_k]]
-    axs[1].set_yticks(np.arange(0, top_k))
-    axs[1].set_yticklabels(top_labels, fontsize=14)
+    axs[1].yaxis.set_ticks(np.arange(0, top_k))
+    axs[1].yaxis.set_ticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
     axs[1].set_xlabel('Seconds', fontsize=14)
     axs[1].xaxis.set_ticks_position('bottom')
     
     plt.savefig(fig_path, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
-    print(f'Saved visualization to: \033[1;34m{fig_path}\033[1;0m')
+    print(f'Saved sound event detection visualization to: \033[1;34m{fig_path}\033[1;0m')
+    print(f'Computed left margin (px): \033[1;34m{left_margin_px}\033[1;00m, axes bbox (fig-fraction): \033[1;34m{axs[1].get_position()}\033[1;00m')
+
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        # Wide Format: Labels as headers to eliminate string redundancy
+        writer.writerow(['time'] + list(labels))
+        for i in range(frames_num):
+            timestamp = i / frames_per_second
+            # Write the timestamp followed by the full vector of 527 probabilities
+            probs = framewise_output[i, :].tolist()
+            writer.writerow([round(timestamp, 3)] + probs)
+    print(f'Saved full framewise CSV (wide matrix) to: \033[1;34m{csv_path}\033[1;0m')
 
 
 
@@ -904,15 +912,6 @@ def sound_event_detection(args):
                 ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
 
             fig.canvas.draw()
-            renderer = fig.canvas.get_renderer()
-            max_label_width_px = 0
-            for lbl in axs[1].yaxis.get_majorticklabels():
-                bbox = lbl.get_window_extent(renderer=renderer)
-                w = bbox.width
-                if w > max_label_width_px:
-                    max_label_width_px = w
-                    
-            
             img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
             img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
             plt.close(fig)
@@ -1060,11 +1059,6 @@ if __name__ == '__main__':
                         help='Duration of sliding window for the dynamic eventogram (in seconds)')
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
-    parser.add_argument('--csv_fps', type=int, default=5,
-                        help='FPS to write to full_event_log.csv (default 5). '
-                             'Use 100 for full resolution (very large file). '
-                             '5 is enough for Shapash + outlier detection.')
-                        
 
     args = parser.parse_args()
     
@@ -1072,7 +1066,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.6.2. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. left_frac restored. ")
+    print(f"Eventogrammer, version 6.5.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added info about Droid tricks. Warning against OOM on Android.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
@@ -1096,11 +1090,9 @@ if __name__ == '__main__':
     print(f"Using torchaudio version: {torchaudio.__version__}")
     print(f"Using torchcodec version: {torchcodec.__version__}")
 
+    print("ANDROID PLATFORM REMINDER:")
+    print("It OOMs in Termux, so just do not try. See chat https://grok.com/c/560a2d80-dd45-4951-9d89-ea14f1a7f6d2?rid=c3dda9e6-63ac-42f4-9527-c56398ef07f8 for details why. If you see 'NotImplementedError: sys.platform = android' after an update:")
 
-    print("Tips: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
-    print("This is often a version mismatch between torch and torchaudio/torchcodec, simply run:")
-    print("pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
-    print(f"If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchcodec/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
     
