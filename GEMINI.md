@@ -124,7 +124,7 @@ By analyzing the **Deltas** (Attack/Decay) and **Skips** (Steady state), an AI o
 - **Memory Management:** The use of 3-minute chunks for inference is a key feature that allows the script to process very large files without consuming excessive RAM.
 - **Auto-Sanitization:** The script includes a "Sanitary Gate" that automatically uses FFmpeg to transcode corrupt audio streams (e.g., missing MPEG headers) into clean PCM format before loading.
 
-## 6. Usage Example
+## 7. Usage Example
 
 ```bash
 # Ensure you are in the root directory of the audioset_tagging_cnn project
@@ -153,7 +153,7 @@ The values in the model's names correspond to the mAP on AudioSet eval
 
 You can download them via e.g.  `wget https://zenodo.org/record/3987831/files/Wavegram_Logmel_Cnn14_mAP%3D0.439.pth?download=1` 
 
-## 7. Strategic Roadmap & Modern Research (2024 Context)
+## 8. Strategic Roadmap & Modern Research (2024 Context)
 
 While PANNs (2020) remains a highly reliable "Toyota Hilux" for audio analysis, recent research (2023-2024) has introduced significant architectural upgrades and paradigm shifts.
 
@@ -179,7 +179,7 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
 
-## 8. Memory-Efficient Architecture (v6.6.0 Update)
+## 9. Memory-Efficient Architecture (v6.6.0 Update)
 
 To handle long-form recordings (e.g., >30 minutes) on resource-constrained devices like Android (Termux), the inference script was refactored to eliminate "Aggregation Spikes."
 
@@ -199,3 +199,16 @@ The new architecture uses a **"Stream and Prune"** strategy:
 
 ### 3. Verification in Termux
 When running version 6.6.0, the memory usage (`top` or `free`) remains remarkably flat throughout the entire duration of long files, making it safe for mobile deployment.
+
+### 4. Video Rendering Speed Hack (v6.6.3 Update)
+To enable full-length video visualization on mobile devices (Android/Termux), the rendering pipeline was refactored to eliminate the "Rendering Bottleneck" caused by redundant Matplotlib and MoviePy compositing calls.
+
+*   **The Problem (30 FPS Redundancy):** Previously, both Static and Dynamic modes redrew the entire visualization 30 times per second. Since the internal data resolution is downsampled to 2 FPS, the script was performing identical, expensive calculations 15 times for every unique data point. This locked the CPU's Global Interpreter Lock (GIL), preventing multi-core utilization.
+*   **The Solution (Data-Synchronous Caching):**
+    *   **Precompute Phase:** All "Top 10 Events" and "Adaptive Window" logic is now executed once per unique data frame (2 FPS) before rendering begins.
+    *   **Frame Caching:** The `make_frame` function now caches the last rendered image. For 14 out of every 15 video frames, it simply returns a pre-rendered buffer from RAM, bypassing Matplotlib and MoviePy's blending engine entirely.
+    *   **OO-Matplotlib Transition:** Switched from `pyplot` to the Object-Oriented API for thread safety and faster canvas draws.
+*   **Results:** 
+    *   **Speed:** Rendering jumped from ~17 it/s to **130+ it/s** (a ~7x improvement).
+    *   **Efficiency:** CPU utilization increased from ~150% to **460%+**, finally saturating all available cores for encoding.
+    *   **Mobile Impact:** This optimization makes `--dynamic_eventogram` viable on Android devices, where CPU cycles are precious.

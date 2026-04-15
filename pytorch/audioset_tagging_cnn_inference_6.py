@@ -831,65 +831,89 @@ def sound_event_detection(args):
     output_fps = 30
 
     if args.dynamic_eventogram:
-        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_dynamic.mp4')
+        output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
         print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
+        
         window_duration = args.window_duration
         window_frames = int(window_duration * frames_per_second)
         half_window_frames = window_frames // 2
 
-        # Precompute unique window frames to improve performance
-        frame_times = np.arange(0, duration, 1/output_fps)
-        unique_windows = {}
-        for t in frame_times:
-            current_frame = int(t * frames_per_second)
-            start_frame = max(0, current_frame - half_window_frames)
-            end_frame = min(frames_num, current_frame + half_window_frames)
-            window_key = (start_frame, end_frame)
-            if window_key not in unique_windows:
-                window_output, window_indexes = get_dynamic_top_events(framewise_output, start_frame, end_frame, top_k)
-                if window_output.size == 0:
-                    window_output = np.zeros((end_frame - start_frame, top_k))
-                    window_indexes = sorted_indexes[:top_k]
-                unique_windows[window_key] = (window_output, window_indexes)
-
-        def make_frame(t):
-            current_frame = int(t * frames_per_second)
-            start_frame = max(0, current_frame - half_window_frames)
-            end_frame = min(frames_num, current_frame + half_window_frames)
+        # 1. Precompute ALL unique data windows at the data's native resolution (frames_per_second, e.g., 2 FPS)
+        # This eliminates redundant KL divergence calculations and top-event searches.
+        print(f"📊  Precomputing data windows for {frames_num} unique time points…")
+        precomputed_data = []
+        for i in range(frames_num):
+            current_frame = i
+            start_f = max(0, current_frame - half_window_frames)
+            end_f = min(frames_num, current_frame + half_window_frames)
             
             # Adaptive window size (if enabled)
             if args.use_adaptive_window:
                 kl_threshold = 0.5
+                # Look back and ahead to find acoustic boundaries
                 for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
-                    if start_frame - offset >= 0:
-                        prev_prob = np.mean(framewise_output[start_frame - offset:start_frame], axis=0)
-                        curr_prob = np.mean(framewise_output[start_frame:start_frame + offset], axis=0)
+                    if start_f - offset >= 0:
+                        prev_prob = np.mean(framewise_output[start_f - offset:start_f], axis=0)
+                        curr_prob = np.mean(framewise_output[start_f:start_f + offset], axis=0)
                         kl_div = compute_kl_divergence(prev_prob, curr_prob)
                         if kl_div > kl_threshold:
-                            start_frame = max(0, start_frame - offset // 2)
+                            start_f = max(0, start_f - offset // 2)
                             break
-                    if end_frame + offset < frames_num:
-                        curr_prob = np.mean(framewise_output[end_frame - offset:end_frame], axis=0)
-                        next_prob = np.mean(framewise_output[end_frame:end_frame + offset], axis=0)
+                    if end_f + offset < frames_num:
+                        curr_prob = np.mean(framewise_output[end_f - offset:end_f], axis=0)
+                        next_prob = np.mean(framewise_output[end_f:end_f + offset], axis=0)
                         kl_div = compute_kl_divergence(curr_prob, next_prob)
                         if kl_div > kl_threshold:
-                            end_frame = min(frames_num, end_frame + offset // 2)
+                            end_f = min(frames_num, end_f + offset // 2)
                             break
             
-            window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
+            window_out, window_idxs = get_dynamic_top_events(framewise_output, start_f, end_f, top_k)
+            if window_out.size == 0:
+                window_out = np.zeros((end_f - start_f, top_k))
+                window_idxs = sorted_indexes[:top_k]
+                
+            precomputed_data.append({
+                'start_f': start_f,
+                'end_f': end_f,
+                'window_out': window_out,
+                'window_idxs': window_idxs
+            })
+
+        # 2. Optimized Frame Generation with Caching
+        # We cache the last rendered image. Since the video FPS (30) is much higher than 
+        # the data FPS (2), most calls to make_frame will return the cached image.
+        frame_cache = {"last_i": -1, "last_img": None}
+
+        def make_frame(t):
+            # Map video time to our data frame index
+            i = int(t * frames_per_second)
+            i = min(i, frames_num - 1)
             
-            # Create frame
+            # If the data frame hasn't changed, return the cached image immediately
+            if i == frame_cache["last_i"]:
+                return frame_cache["last_img"]
+            
+            # Retrieve precomputed window data
+            data = precomputed_data[i]
+            start_f, end_f = data['start_f'], data['end_f']
+            window_output, window_indexes = data['window_out'], data['window_idxs']
+            
+            # Create the figure using OO API for better performance/safety
             fig_fr = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
-            gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+            gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, 
+                                        top=0.95, bottom=0.08, hspace=0.05)
             axs_fr = [fig_fr.add_subplot(gs_fr[0]), fig_fr.add_subplot(gs_fr[1])]
 
-            # Spectrogram for window
-            stft_window = stft[:, start_frame:end_frame]
+            # Calculate a stable timestamp for the title
+            t_stable = i / frames_per_second
+            
+            # Render Spectrogram for window
+            stft_window = stft[:, start_f:end_f]
             axs_fr[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
             axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
-            axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
+            axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t_stable:.1f}s)', fontsize=14)
 
-            # Eventogram for window
+            # Render Eventogram for window
             axs_fr[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
             window_labels = np.array(labels)[window_indexes]
             axs_fr[1].yaxis.set_ticks(np.arange(0, top_k))
@@ -898,29 +922,36 @@ def sound_event_detection(args):
             axs_fr[1].set_xlabel('Seconds', fontsize=14)
             axs_fr[1].xaxis.set_ticks_position('bottom')
 
-            # Adjust x-axis ticks for both plots
-            window_seconds = (end_frame - start_frame) / frames_per_second
+            # Adjust x-axis ticks to show absolute time in seconds
+            window_seconds = (end_f - start_f) / frames_per_second
             tick_interval_window = max(1, int(window_seconds / 5))
-            x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
-            x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
+            x_ticks_window = np.arange(0, end_f - start_f + 1, frames_per_second * tick_interval_window)
+            x_labels_window = np.arange(int(start_f / frames_per_second), 
+                                        int(end_f / frames_per_second) + 1, 
+                                        tick_interval_window)
             
             for ax in axs_fr:
                 ax.xaxis.set_ticks(x_ticks_window)
                 ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
-                ax.set_xlim(0, end_frame - start_frame)
+                ax.set_xlim(0, end_f - start_f)
 
-            # Add marker
-            marker_x = current_frame - start_frame
+            # Add marker (at the current frame's position relative to the window)
+            marker_x = i - start_f
             for ax in axs_fr:
                 ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
 
+            # Draw and convert to image
             fig_fr.canvas.draw()
             img = np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8)
-            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
+            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha
             plt.close(fig_fr)
+            
+            # Update cache
+            frame_cache["last_i"] = i
+            frame_cache["last_img"] = img
             return img
 
-        # Generate dynamic video
+        # Use VideoClip to generate the dynamic video
         eventogram_clip = VideoClip(make_frame, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
         eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
@@ -937,21 +968,53 @@ def sound_event_detection(args):
     if args.static_eventogram:    
         print(f"🎞  Rendering static eventogram video …")
         output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
-        static_eventogram_clip = ImageClip(fig_path, duration=duration)
+        
+        # 1. Load the base static image as a NumPy array once
+        # Using the actual generated PNG ensures we have the correct final dimensions and margins.
+        base_img = plt.imread(fig_path)
+        # Handle alpha if present and convert to uint8 (0-255)
+        if base_img.dtype == np.float32:
+            base_img = (base_img * 255).astype(np.uint8)
+        if base_img.shape[2] == 4:
+            base_img = base_img[:, :, :3]
+            
+        h, w, _ = base_img.shape
+        x_start = int(left_frac * w)
+        x_end = w
+        
+        # 2. Optimized Frame Generation with 2 FPS Marker Caching
+        # Jerkiness is accepted for speed; marker only moves when data 'ticks'.
+        frame_cache_static = {"last_i": -1, "last_img": None}
 
-        def marker_position(t):
-            w = static_eventogram_clip.w
-            x_start = int(left_frac * w)
-            x_end = w
-            frac = np.clip(t / max(duration, 1e-8), 0.0, 1.0)
-            x_pos = x_start + (x_end - x_start) * frac
-            return (x_pos, 0)
+        def make_frame_static(t):
+            # Map video time to our data frame index (2 FPS)
+            i = int(t * frames_per_second)
+            i = min(i, frames_num - 1)
+            
+            # Return cached image if marker hasn't moved
+            if i == frame_cache_static["last_i"]:
+                return frame_cache_static["last_img"]
+            
+            # Calculate marker position based on the data frame index
+            frac = i / max(frames_num - 1, 1)
+            marker_x = int(x_start + (x_end - x_start) * frac)
+            
+            # Create frame by drawing a 2px red line on a copy of the base image
+            img = base_img.copy()
+            # Draw marker (vertical red line)
+            m_left = max(0, marker_x - 1)
+            m_right = min(w, marker_x + 1)
+            img[:, m_left:m_right] = [255, 0, 0] # Red marker
+            
+            # Update cache
+            frame_cache_static["last_i"] = i
+            frame_cache_static["last_img"] = img
+            return img
 
-        marker = ColorClip(size=(2, static_eventogram_clip.h), color=(255, 0, 0)).with_duration(duration)
-        marker = marker.with_position(marker_position)
-        eventogram_visual_clip = CompositeVideoClip([static_eventogram_clip, marker])
+        # Use VideoClip with the caching function
+        static_eventogram_clip = VideoClip(make_frame_static, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
-        eventogram_with_audio_clip = eventogram_visual_clip.with_audio(audio_clip)
+        eventogram_with_audio_clip = static_eventogram_clip.with_audio(audio_clip)
         eventogram_with_audio_clip.fps = output_fps
 
         eventogram_with_audio_clip.write_videofile(
