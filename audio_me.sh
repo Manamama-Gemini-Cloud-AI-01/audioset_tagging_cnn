@@ -40,10 +40,10 @@ echo "--- AudioSet Tagging CNN Inference (SED Mode) ---"
 echo "Model Type: $MODEL_TYPE"
 echo "Checkpoint path: $CHECKPOINT_PATH"
 echo "Input file and parameters: $@"
-echo "Add  '--dynamic_eventogram'  or  '--static_eventogram'  for a video of the graph with a moving marker."
+echo -e "Add  \033[1;34m--dynamic_eventogram \033[1;0m  or  \033[1;34m--static_eventogram\033[1;0m  for a video of the graph with a moving marker."
 echo 
 
-echo "Note: If you see errors with sox / mp3 parsing → install sox + libsox-fmt-mp3, test it via 'sox --info "$@" ' "
+echo "Note: If you see errors with sox / mp3 parsing, then apt install 'sox' and 'libsox-fmt-mp3', test it via 'sox --info "$@" ' "
 echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
 
 echo "Note: if no torchaudio backends, do find a patch file, usually called speechbrain.patch, and patch speechbrain itself. " 
