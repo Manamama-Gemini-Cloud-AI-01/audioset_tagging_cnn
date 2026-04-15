@@ -178,4 +178,24 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 # Fetch full markdown summary of a specific paper (e.g., ConvNeXt paper)
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
- 
+
+## 8. Memory-Efficient Architecture (v6.6.0 Update)
+
+To handle long-form recordings (e.g., >30 minutes) on resource-constrained devices like Android (Termux), the inference script was refactored to eliminate "Aggregation Spikes."
+
+### 1. The "Aggregation Bottleneck" Problem
+Previously, the script would process 3-minute chunks but keep all high-resolution results (100 FPS) in RAM. For a 34-minute file, this created a massive cumulative memory load:
+- **Full Waveform (32kHz):** ~270 MB
+- **Full Framewise Matrix (527 classes @ 100 FPS):** ~450 MB
+- **Full Spectrogram (Complex STFT):** ~850 MB
+- **Result:** Usage would spike toward 3GB, triggering OOM crashes in Termux.
+
+### 2. The "Lean" Solution
+The new architecture uses a **"Stream and Prune"** strategy:
+- **Direct Disk Streaming:** The high-resolution (100 FPS) probability matrix is written directly to `full_event_log.csv` during the inference loop. RAM usage for this data is now constant (single row) rather than cumulative.
+- **50x Internal Downsampling:** All internal RAM structures used for visualization (Eventograms, Dashboard, Spectrogram) are now **max-pooled to 2 FPS** as they are generated. This reduces the visualization RAM footprint by 98% (e.g., 900MB → 18MB).
+- **Chunked Post-Processing:** The Spectrogram (STFT) is calculated in 3-minute segments and immediately downsampled, eliminating the whole-file "kill shot" memory spike.
+- **Peak Preservation:** By using `max-pooling` during downsampling, the script ensures that short, sharp sound events (like a car toot or a click) are still accurately represented in the 2 FPS graphs even if they fall between sample points.
+
+### 3. Verification in Termux
+When running version 6.6.0, the memory usage (`top` or `free`) remains remarkably flat throughout the entire duration of long files, making it safe for mobile deployment.

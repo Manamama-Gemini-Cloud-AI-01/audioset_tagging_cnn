@@ -1045,7 +1045,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.5.2. Recently changed:  * Added a static_eventogram argument. Reorder artifact creation logic. Added info about Droid tricks. Warning against OOM on Android.")
+    print(f"Eventogrammer, version 6.6.0 (Lean Architecture). Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files.")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
