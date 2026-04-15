@@ -828,10 +828,8 @@ def sound_event_detection(args):
 
     # Video rendering
     # Force output FPS to 30 for faster rendering and smaller files
+    output_fps = 30
 
-
- 
-        
     if args.dynamic_eventogram:
         output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_dynamic.mp4')
         print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
@@ -881,24 +879,24 @@ def sound_event_detection(args):
             window_output, window_indexes = unique_windows.get((start_frame, end_frame), (np.zeros((end_frame - start_frame, top_k)), sorted_indexes[:top_k]))
             
             # Create frame
-            fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
-            axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
+            fig_fr = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
+            gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+            axs_fr = [fig_fr.add_subplot(gs_fr[0]), fig_fr.add_subplot(gs_fr[1])]
 
             # Spectrogram for window
             stft_window = stft[:, start_frame:end_frame]
-            axs[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
-            axs[0].set_ylabel('Frequency bins', fontsize=14)
-            axs[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
-            print(f'; (t={t:.1f}s)')
+            axs_fr[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
+            axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
+            axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t:.1f}s)', fontsize=14)
+
             # Eventogram for window
-            axs[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+            axs_fr[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
             window_labels = np.array(labels)[window_indexes]
-            axs[1].yaxis.set_ticks(np.arange(0, top_k))
-            axs[1].yaxis.set_ticklabels(window_labels, fontsize=14)
-            axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-            axs[1].set_xlabel('Seconds', fontsize=14)
-            axs[1].xaxis.set_ticks_position('bottom')
+            axs_fr[1].yaxis.set_ticks(np.arange(0, top_k))
+            axs_fr[1].yaxis.set_ticklabels(window_labels, fontsize=14)
+            axs_fr[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+            axs_fr[1].set_xlabel('Seconds', fontsize=14)
+            axs_fr[1].xaxis.set_ticks_position('bottom')
 
             # Adjust x-axis ticks for both plots
             window_seconds = (end_frame - start_frame) / frames_per_second
@@ -906,37 +904,36 @@ def sound_event_detection(args):
             x_ticks_window = np.arange(0, end_frame - start_frame + 1, frames_per_second * tick_interval_window)
             x_labels_window = np.arange(int(start_frame / frames_per_second), int(end_frame / frames_per_second) + 1, tick_interval_window)
             
-            for ax in axs:
+            for ax in axs_fr:
                 ax.xaxis.set_ticks(x_ticks_window)
                 ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
                 ax.set_xlim(0, end_frame - start_frame)
 
             # Add marker
             marker_x = current_frame - start_frame
-            for ax in axs:
+            for ax in axs_fr:
                 ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
 
-            fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+            fig_fr.canvas.draw()
+            img = np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8)
             img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha channel
-            plt.close(fig)
+            plt.close(fig_fr)
             return img
 
         # Generate dynamic video
         eventogram_clip = VideoClip(make_frame, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
         eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
-        eventogram_with_audio_clip.fps = output_fps # Use the fixed output_fps
+        eventogram_with_audio_clip.fps = output_fps
 
         eventogram_with_audio_clip.write_videofile(
             output_video_path,
             codec="libx264",
-            fps=output_fps, # Use the fixed output_fps
+            fps=output_fps,
             threads=os.cpu_count()
         )
         print(f"🎹 Saved the dynamic eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
 
-    
     if args.static_eventogram:    
         print(f"🎞  Rendering static eventogram video …")
         output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
@@ -965,16 +962,14 @@ def sound_event_detection(args):
         )
         print(f"🎹 Saved the static eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
 
-
     if (args.dynamic_eventogram or args.static_eventogram):
         if is_video:
             print("🎬  Overlaying the source media with the created eventogram…")
             root, ext = os.path.splitext(output_video_path)
             final_output_path = f"{root}_overlay{ext}"
-            print(f"🎬  Source resolution:")
             _, _, base_w, base_h = get_duration_and_fps(audio_path)
-            print(f"💁  Overlay resolution:")
             _, _, ovr_w, ovr_h = get_duration_and_fps(output_video_path)
+            
             if base_w >= ovr_w:
                 target_width, target_height = base_w, base_h
             else:
@@ -982,11 +977,11 @@ def sound_event_detection(args):
                 target_height = int(base_h * ovr_w / base_w)
                 if target_height % 2:
                     target_height += 1
+            
             print(f"🎯 Target resolution: {target_width}x{target_height}")
             main_input, overlay_input = audio_path, output_video_path
 
             overlay_cmd = [
-               
                 "ffmpeg", "-y",
                 "-i", main_input,
                 "-i", overlay_input,
@@ -1012,11 +1007,10 @@ def sound_event_detection(args):
                 "-shortest",
                 final_output_path
             ])
-            #Note: the aac codec is needed for some "Opus unusual, experimental in MP4 containers" cases
 
             try:
                 subprocess.run(overlay_cmd, check=True)
-                print(f"✅ 🎥 The new overlaid video has been saved to: \033[1;34m{final_output_path}\033[1;0m")
+                print(f"✅ 🎥 The overlaid video has been saved to: \033[1;34m{final_output_path}\033[1;0m")
             except subprocess.CalledProcessError as e:
                 print(f"\033[1;31mError during FFmpeg overlay: {e}\033[0m")
                 return
@@ -1024,11 +1018,10 @@ def sound_event_detection(args):
             if temp_video_path and os.path.exists(temp_video_path):
                 try:
                     os.remove(temp_video_path)
-                    print(f"Deleted temporary CFR video: \033[1;34m{temp_video_path}\033[1;0m")
-                except Exception as e:
-                    print(f"\033[1;33mWarning: Failed to delete temporary CFR video {temp_video_path}: {e}\033[0m")
+                except:
+                    pass
         else:
-            print("🎧 As the source is audio-only, the eventogram video is the final media output and no overlay video shall be created.")
+            print("🎧 Source is audio-only, no overlay video created.")
 
 
     
@@ -1076,20 +1069,20 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.6.2. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. left_frac restored. ")
+    print(f"Eventogrammer, version 6.6.3. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
 
  
-    print(f"Notes: a file of duration of 30 mins requires 6GB RAM to process, with the processing time ratio: 1 second of orignal duration : 10 seconds to process on a regular 200 GFLOPs, 4 core CPU.") 
+    print(f"Notes: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU.") 
     print(f"If the file is too long, use e.g. this to split:") 
     print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path} -c copy -f segment -segment_time 1200 output_%03d.mp4")
     
 
  
     print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
-    print(f"Note on the  models:")   
+    print(f"Note on the models:")   
     print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
     print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
     print()
