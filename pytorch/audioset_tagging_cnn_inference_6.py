@@ -474,63 +474,88 @@ def sound_event_detection(args):
 
     chunk_duration = 180  # 3 minutes
     chunk_samples = int(chunk_duration * sample_rate)
-    framewise_outputs = []
     
-    for start in range(0, len(waveform), chunk_samples):
-        chunk = waveform[start:start + chunk_samples]
-        if len(chunk) < sample_rate // 10:
-            print(f"Skipping small chunk at start={start}, len={len(chunk)}")
-            continue
-        chunk = chunk[None, :]  # Shape: [1, samples]
-        chunk = move_data_to_device(torch.from_numpy(chunk).float(), device)
-        print(f"Processing chunk: start={start}, len={len(chunk)}")
-        
-        with torch.no_grad():
-            model.eval()
-            try:
-                batch_output_dict = model(chunk, None)
-                framewise_output_chunk = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
-                print(f"Chunk output shape: {framewise_output_chunk.shape}")
-                framewise_outputs.append(framewise_output_chunk)
-            except Exception as e:
-                print(f"\033[1;31mError processing chunk at start={start}: {e}\033[0m")
-                continue
-    
-    if not framewise_outputs:
-        print("\033[1;31mError: No valid chunks processed. Cannot generate eventogram.\033[0m")
-        return
-    
-    framewise_output = np.concatenate(framewise_outputs, axis=0)
-    print(f'Sound event detection result (time_steps x classes_num): \033[1;34m{framewise_output.shape}\033[1;0m')
-
+    # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
+    vis_fps = 2  # Target 2 FPS for visualization as suggested
     frames_per_second = sample_rate // hop_size
-    waveform_tensor = torch.from_numpy(waveform).to(device)
-    stft = torch.stft(
-        waveform_tensor,
-        n_fft=window_size,
-        hop_length=hop_size,
-        window=torch.hann_window(window_size).to(device),
-        center=True,
-        return_complex=True
-    )
-    stft = stft.abs().cpu().numpy()
-    frames_num = int(duration * frames_per_second)
+    vis_downsample = frames_per_second // vis_fps
     
-    if framewise_output.shape[0] < frames_num:
-        pad_width = frames_num - framewise_output.shape[0]
-        framewise_output = np.pad(framewise_output, ((0, pad_width), (0, 0)), mode='constant')
+    framewise_vis_list = []
+    stft_vis_list = []
     
+    print(f"📊  Processing in {chunk_duration/60}m chunks. CSV: {frames_per_second} FPS | RAM/Vis: {vis_fps} FPS")
+
+    with open(csv_path, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['time'] + list(labels))
+        
+        for start in range(0, len(waveform), chunk_samples):
+            chunk = waveform[start:start + chunk_samples]
+            if len(chunk) < sample_rate // 10:
+                continue
+            
+            # 1. Inference
+            chunk_tensor = move_data_to_device(torch.from_numpy(chunk[None, :]).float(), device)
+            with torch.no_grad():
+                model.eval()
+                try:
+                    batch_output_dict = model(chunk_tensor, None)
+                    chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
+                except Exception as e:
+                    print(f"\033[1;31mError in chunk at {start}: {e}\033[0m")
+                    continue
+            
+            # 2. Stream High-Res CSV
+            chunk_start_time = start / sample_rate
+            for i in range(len(chunk_out)):
+                timestamp = chunk_start_time + (i / frames_per_second)
+                writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
+            
+            # 3. Downsample for RAM-based Visualization (Max-Pool to preserve peaks)
+            # We use max-pooling so we don't miss short sound events in the graph
+            for i in range(0, len(chunk_out), vis_downsample):
+                vis_slice = chunk_out[i : i + vis_downsample]
+                if len(vis_slice) > 0:
+                    framewise_vis_list.append(np.max(vis_slice, axis=0))
+
+            # 4. Chunked STFT for Visualization
+            chunk_tensor_stft = torch.from_numpy(chunk).to(device)
+            chunk_stft = torch.stft(
+                chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
+                window=torch.hann_window(window_size).to(device),
+                center=True, return_complex=True
+            ).abs().cpu().numpy()
+            
+            # Downsample STFT columns
+            stft_vis_list.append(chunk_stft[:, ::vis_downsample])
+            
+            print(f"Chunk at {int(chunk_start_time/60)}m done. RAM usage: {len(framewise_vis_list)} vis-frames cached.")
+
+    # 5. Global Aggregation (Lean)
+    framewise_output = np.array(framewise_vis_list) # Rename for compatibility with subsequent blocks
+    stft = np.concatenate(stft_vis_list, axis=1) # Correctly concatenate STFT chunks
+    del framewise_vis_list
+    del stft_vis_list
+    del waveform
+    
+    # Update frame metadata for downsampled resolution
+    frames_per_second = vis_fps 
+    frames_num = len(framewise_output)
+    
+    print(f'Aggregation complete. Internal RAM resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
+
     # Static PNG visualization
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_k = 10
-    top_result_mat = framewise_output[:frames_num, sorted_indexes[0:top_k]]
+    top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
 
     fig_width_px = 1280
     fig_height_px = 480
     dpi = 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
-
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=0.0, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
+    
+    # Use the downsampled indices for the plot
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
     axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
 
     axs[0].matshow(np.log(stft + 1e-10), origin='lower', aspect='auto', cmap='jet')
@@ -539,11 +564,12 @@ def sound_event_detection(args):
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num + 1, frames_per_second * tick_interval)
+    x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
     x_labels = np.arange(0, int(duration) + 1, tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
     axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num)
+    
     top_labels = np.array(labels)[sorted_indexes[0:top_k]]
     axs[1].set_yticks(np.arange(0, top_k))
     axs[1].set_yticklabels(top_labels, fontsize=14)
@@ -551,56 +577,9 @@ def sound_event_detection(args):
     axs[1].set_xlabel('Seconds', fontsize=14)
     axs[1].xaxis.set_ticks_position('bottom')
     
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    max_label_width_px = 0
-    for lbl in axs[1].yaxis.get_majorticklabels():
-        bbox = lbl.get_window_extent(renderer=renderer)
-        w = bbox.width
-        if w > max_label_width_px:
-            max_label_width_px = w
-
-    pad_px = 8
-    left_margin_px = int(max_label_width_px + pad_px + 6)
-    fig_w_in = fig.get_size_inches()[0]
-    fig_w_px = fig_w_in * dpi
-    left_frac = left_margin_px / fig_w_px
-    if left_frac < 0:
-        left_frac = 0.0
-    if left_frac > 0.45:
-        left_frac = 0.45
-
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
-    fig.clear()
-    axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
-
-    axs[0].matshow(np.log(stft + 1e-10), origin='lower', aspect='auto', cmap='jet')
-    axs[0].set_ylabel('Frequency bins', fontsize=14)
-    axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
-    axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
-    axs[1].set_xlim(0, frames_num)
-    axs[1].yaxis.set_ticks(np.arange(0, top_k))
-    axs[1].yaxis.set_ticklabels(top_labels, fontsize=14)
-    axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-    axs[1].set_xlabel('Seconds', fontsize=14)
-    axs[1].xaxis.set_ticks_position('bottom')
-    
     plt.savefig(fig_path, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
-    print(f'Saved sound event detection visualization to: \033[1;34m{fig_path}\033[1;0m')
-    print(f'Computed left margin (px): \033[1;34m{left_margin_px}\033[1;00m, axes bbox (fig-fraction): \033[1;34m{axs[1].get_position()}\033[1;00m')
-
-    with open(csv_path, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        # Wide Format: Labels as headers to eliminate string redundancy
-        writer.writerow(['time'] + list(labels))
-        for i in range(frames_num):
-            timestamp = i / frames_per_second
-            # Write the timestamp followed by the full vector of 527 probabilities
-            probs = framewise_output[i, :].tolist()
-            writer.writerow([round(timestamp, 3)] + probs)
-    print(f'Saved full framewise CSV (wide matrix) to: \033[1;34m{csv_path}\033[1;0m')
+    print(f'Saved visualization to: \033[1;34m{fig_path}\033[1;0m')
 
 
 
