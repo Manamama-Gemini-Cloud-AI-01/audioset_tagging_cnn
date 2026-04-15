@@ -80,7 +80,7 @@ CSV_PATH="${OUTPUT_DIR}/full_event_log.csv"
 if [[ -f "$CSV_PATH" ]]; then
     echo
     echo "📊  Inference complete. Launching Shapash Correlations Dashboard..."
-    python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
+    time python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
 else
     echo
     echo "⚠️  Warning: full_event_log.csv not found at $CSV_PATH. Skipping dashboard."
