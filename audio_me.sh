@@ -61,7 +61,7 @@ fi
 
 
 # Run inference
-$PREFIX/usr/bin/time -v  python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
+$PREFIX/bin/time -v c python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \
     --cuda \
