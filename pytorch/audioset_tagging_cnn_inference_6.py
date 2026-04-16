@@ -1132,7 +1132,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.6.3. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. ")
+    print(f"Eventogrammer, version 6.6.4. Material Changes: \n * REMOVED torchcodec: It was a 'dead weight' causing crashes on Android due to broken CUDA library linkage.\n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
@@ -1168,12 +1168,6 @@ if __name__ == '__main__':
     
 
     print(f"")
-
-    if args.mode == 'audio_tagging':
-        audio_tagging(args)
-    else:
-        sound_event_detection(args)
-t(f"")
 
     if args.mode == 'audio_tagging':
         audio_tagging(args)
