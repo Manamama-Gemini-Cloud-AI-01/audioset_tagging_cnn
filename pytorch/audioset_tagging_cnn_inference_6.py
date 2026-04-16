@@ -454,9 +454,22 @@ def sound_event_detection(args):
             subprocess.run([
                 'ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'
             ], check=True)
-            waveform, sr = torchaudio.load(sanitized_temp_path)
-            print(f"✅ Sanitization successful. Loaded audio from: \033[1;34m{sanitized_temp_path}\033[1;0m")
-            # We don't delete yet as we need sr check below, but we mark for later
+            
+            # Try torchaudio again on the sanitized file
+            try:
+                waveform, sr = torchaudio.load(sanitized_temp_path)
+            except Exception as e2:
+                # If torchaudio still fails (common in Proot/Termux without backends), use soundfile
+                print(f"\033[1;33mWarning: torchaudio failed on sanitized file ({e2}). Falling back to soundfile...\033[0m")
+                waveform_np, sr = sf.read(sanitized_temp_path)
+                # Convert soundfile's [samples, channels] to torch's [channels, samples]
+                waveform = torch.from_numpy(waveform_np).float()
+                if waveform.ndim == 1:
+                    waveform = waveform.unsqueeze(0)
+                else:
+                    waveform = waveform.T
+            
+            print(f"✅ Sanitization and loading successful. Loaded audio from: \033[1;34m{sanitized_temp_path}\033[1;0m")
             video_input_path = sanitized_temp_path
         except subprocess.CalledProcessError as f_err:
             print(f"\033[1;31mError: FFmpeg sanitization failed: {f_err}\033[0m")
