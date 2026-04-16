@@ -493,7 +493,7 @@ def sound_event_detection(args):
     waveform = waveform_np 
     print(f"Processed waveform shape: {waveform.shape}")
 
-    chunk_duration = 180  # 3 minutes
+    chunk_duration = 60  # Reduced to 1 minute to lower peak RAM during forward pass
     chunk_samples = int(chunk_duration * sample_rate)
     
     # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
@@ -520,6 +520,7 @@ def sound_event_detection(args):
             with torch.no_grad():
                 model.eval()
                 try:
+                    # Capture batch_output_dict to get internal Spectrogram if available
                     batch_output_dict = model(chunk_tensor, None)
                     chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
                 except Exception as e:
@@ -541,15 +542,33 @@ def sound_event_detection(args):
                     framewise_vis_list.append(np.max(vis_slice, axis=0))
 
             # 4. Chunked STFT for Visualization
-            chunk_tensor_stft = torch.from_numpy(chunk).to(device)
-            chunk_stft = torch.stft(
-                chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
-                window=torch.hann_window(window_size).to(device),
-                center=True, return_complex=True
-            ).abs().cpu().numpy()
+            # Optimization: Try to reuse STFT from model if possible, otherwise calculate manually
+            # In SED mode, chunk_tensor already went through model.spectrogram_extractor
+            try:
+                # Access the spectrogram from the model's forward pass if it was captured
+                with torch.no_grad():
+                    # We re-run only the extractor part on the same chunk to get the magnitude
+                    # This is much faster and uses less RAM than a full model pass
+                    spec = model.spectrogram_extractor(chunk_tensor) # (1, 1, time, freq)
+                    chunk_stft = spec.squeeze(0).squeeze(0).transpose(0, 1).cpu().numpy()
+            except:
+                # Fallback to manual torch.stft if extractor access fails
+                chunk_tensor_stft = torch.from_numpy(chunk).to(device)
+                chunk_stft = torch.stft(
+                    chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
+                    window=torch.hann_window(window_size).to(device),
+                    center=True, return_complex=True
+                ).abs().cpu().numpy()
             
             # Downsample STFT columns
             stft_vis_list.append(chunk_stft[:, ::vis_downsample])
+            
+            # Explicit local cleanup within the loop to smooth the "attack phase"
+            del chunk_tensor
+            del chunk_out
+            del batch_output_dict
+            del chunk_stft
+            gc.collect()
             
             print(f"Chunk at {int(chunk_start_time/60)}m done. RAM usage: {len(framewise_vis_list)} vis-frames cached.")
 

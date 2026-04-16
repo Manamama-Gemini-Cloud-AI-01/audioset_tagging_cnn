@@ -2,6 +2,7 @@ import numpy as np
 import time
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def move_data_to_device(x, device):
@@ -112,9 +113,11 @@ def interpolate(x, ratio):
       upsampled: (batch_size, time_steps * ratio, classes_num)
     """
     (batch_size, time_steps, classes_num) = x.shape
-    upsampled = x[:, :, None, :].repeat(1, 1, ratio, 1)
-    upsampled = upsampled.reshape(batch_size, time_steps * ratio, classes_num)
-    return upsampled
+    # (batch_size, classes_num, time_steps) for F.interpolate
+    x = x.transpose(1, 2)
+    upsampled = F.interpolate(x, size=time_steps * ratio, mode='nearest')
+    # Back to (batch_size, time_steps * ratio, classes_num)
+    return upsampled.transpose(1, 2)
 
 
 def pad_framewise_output(framewise_output, frames_num):
@@ -122,19 +125,24 @@ def pad_framewise_output(framewise_output, frames_num):
     is the same as the value of the last frame.
 
     Args:
-      framewise_output: (batch_size, frames_num, classes_num)
-      frames_num: int, number of frames to pad
+      framewise_output: (batch_size, current_frames, classes_num)
+      frames_num: int, target number of frames to pad to
 
     Outputs:
       output: (batch_size, frames_num, classes_num)
     """
-    pad = framewise_output[:, -1 :, :].repeat(1, frames_num - framewise_output.shape[1], 1)
-    """tensor for padding"""
-
-    output = torch.cat((framewise_output, pad), dim=1)
-    """(batch_size, frames_num, classes_num)"""
-
-    return output
+    current_frames = framewise_output.shape[1]
+    if current_frames >= frames_num:
+        return framewise_output[:, :frames_num, :]
+    
+    # Pad at the end (dim=1) with the last value
+    diff = frames_num - current_frames
+    # F.pad expects padding for (last_dim_start, last_dim_end, second_last_dim_start, ...)
+    # Here dims are (batch, time, classes). We want to pad time (dim 1).
+    # We transpose to (batch, classes, time) and pad the last dim.
+    x = framewise_output.transpose(1, 2)
+    x = F.pad(x, (0, diff), mode='replicate')
+    return x.transpose(1, 2)
 
 
 def count_parameters(model):
