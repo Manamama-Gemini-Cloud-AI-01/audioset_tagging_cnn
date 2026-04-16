@@ -1154,20 +1154,26 @@ if __name__ == '__main__':
 
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
-    print(f"Using torchcodec version: {torchcodec.__version__}")
+    # print(f"Using torchcodec version: {torchcodec.__version__}") # Disabled
 
 
     print("Tips: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
-    print("This is often a version mismatch between torch and torchaudio/torchcodec, simply run:")
-    print("pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("This is often a version mismatch between torch and torchaudio, simply run:")
+    print("pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
     print(f"If you see 'NotImplementedError: sys.platform = android' after an update:")
-    print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchcodec/_internally_replaced_utils.py")
+    print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
     
     #print(f"Using coverage version: {coverage.__version__}")
     
 
     print(f"")
+
+    if args.mode == 'audio_tagging':
+        audio_tagging(args)
+    else:
+        sound_event_detection(args)
+t(f"")
 
     if args.mode == 'audio_tagging':
         audio_tagging(args)
