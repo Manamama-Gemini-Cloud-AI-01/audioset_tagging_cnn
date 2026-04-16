@@ -478,11 +478,19 @@ def sound_event_detection(args):
             print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
             return
 
+    import gc
     print(f"Loaded waveform shape: {waveform.shape}, sample rate: {sr}")
     if sr != sample_rate:
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
+        gc.collect() # Clear resampling workspace
+        
     waveform = waveform.mean(dim=0, keepdim=True)  # Convert to mono
-    waveform = waveform.squeeze(0).numpy()  # Convert to numpy for STFT
+    waveform_np = waveform.squeeze(0).numpy()  # Convert to numpy for STFT
+    
+    # --- CRITICAL: Delete torch tensors to free ~1-2GB of RAM immediately ---
+    del waveform
+    gc.collect()
+    waveform = waveform_np 
     print(f"Processed waveform shape: {waveform.shape}")
 
     chunk_duration = 180  # 3 minutes
@@ -1145,7 +1153,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.6.4. Material Changes: \n * REMOVED torchcodec: It was a 'dead weight' causing crashes on Android due to broken CUDA library linkage.\n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. ")
+    print(f"Eventogrammer, version 6.6.5. Material Changes: \n * Removed torchcodec: as it crashes on Android due to broken CUDA library linkage. On the other hand, torchaudio nowadays imports torchcodec always, so a note about it is left in the tips.\n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS.\n * Chunked Post-processing: Spectrogram is calculated in 3m segments to prevent OOM spikes on long files. CSV reflects samples at lower frequence: size saving. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
@@ -1173,6 +1181,9 @@ if __name__ == '__main__':
     print("Tips: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
     print("This is often a version mismatch between torch and torchaudio, simply run:")
     print("pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("pip install -U torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("On the other hand, in e.g. Prooted Debian under Termux, torchcodec has dependencies on NVIDA .so files and errors here, so now the script does not implement 'import torchcodec' at all, just in case.")
+
     print(f"If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
