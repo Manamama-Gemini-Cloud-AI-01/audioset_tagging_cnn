@@ -1153,7 +1153,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.7.1. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. ")
+    print(f"Eventogrammer, version 6.7.2. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
@@ -1170,16 +1170,12 @@ if __name__ == '__main__':
     print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
     print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
     print()
-    print(f"Note on speed: works 1.7 times faster in Prooted Debian, see comments why so.")  
+    print(f"Note on speed: works 1.7 times faster in Prooted Debian than in Termux, see the comments why so.")  
+    print(f"Note on the out of memory crashes: close all other programs in Droid, especially the browser. Or just restart whole phone. Or do it in Recovery.")  
     # In Termux your PyTorch build is explicitly: USE_EIGEN_FOR_BLAS=ON. It means: PyTorch tensor ops that would normally dispatch to BLAS/LAPACK are not using an external high-performance BLAS backend at all. They are using Eigen’s generic CPU kernels compiled into PyTorch. That decision is compile-time, not runtime. In practice: same workload, same model family, same CPU class, different environments, and we observed a consistent ~1.7× gap in wall time (Termux ~14 min vs Debian ~8 min).
-
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-
-    print(f"Using moviepy version: {moviepy.__version__}")
-    print(f"Using torchaudio version: {torchaudio.__version__}")
-    print(f"Using torchcodec version: {torchcodec.__version__}") 
-    # May need to be disabled as it errors if version 0 dev, see also below what to do then: 
-
+    
+    
+    
 
     print("Tips: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
     print("This is often a version mismatch between torch and torchaudio, simply run:")
@@ -1191,7 +1187,16 @@ if __name__ == '__main__':
     print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
     
-    #print(f"Using coverage version: {coverage.__version__}") # Removed for now
+
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    print(f"Using moviepy version: {moviepy.__version__}")
+    print(f"Using torchaudio version: {torchaudio.__version__}")
+    # May need to be disabled as it errors if installed some weird version 0 dev. 
+    print(f"Using torchcodec version: {torchcodec.__version__}") 
+
+
+    
     
 
     print(f"")
