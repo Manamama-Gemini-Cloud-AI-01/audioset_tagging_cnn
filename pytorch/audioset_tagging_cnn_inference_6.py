@@ -333,10 +333,32 @@ def sound_event_detection(args):
 
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
-    # --- Idempotency Check ---
+
+    # --- Idempotency Check (Context-Aware Skipping) ---
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
-    if os.path.exists(csv_path):
-        print(f"✅ Skipping {audio_path}, because {csv_path} already exists. Remove that file to reprocess that folder.")
+    is_video = is_video_file(audio_path)
+    
+    # Define what files we strictly expect to see before skipping
+    required_files = [csv_path]
+    if args.static_eventogram:
+        vid_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+        # If it's a video file, the final result is the overlay
+        if is_video:
+            root, ext = os.path.splitext(vid_path)
+            required_files.append(f"{root}_overlay{ext}")
+        else:
+            required_files.append(vid_path)
+            
+    if args.dynamic_eventogram:
+        vid_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
+        if is_video:
+            root, ext = os.path.splitext(vid_path)
+            required_files.append(f"{root}_overlay{ext}")
+        else:
+            required_files.append(vid_path)
+            
+    if all(os.path.exists(f) for f in required_files):
+        print(f"✅ Skipping {audio_path}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         return
 
     # '''    
@@ -365,10 +387,10 @@ def sound_event_detection(args):
         print(f"\033[1;33mWarning: Initial duration detection for {audio_path} returned {duration}. Attempting conversion to MP3.\033[0m")
         original_path_for_conversion = audio_path # Keep original path for ffmpeg input
         audio_dir = os.path.dirname(original_path_for_conversion)
-        base_filename = get_filename(original_path_for_conversion)
+        base_filename_conv = get_filename(original_path_for_conversion)
         
         # New MP3 path in temporary directory
-        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename}_converted.mp3")
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_conv}_converted.mp3")
 
         try:
             print(f"\033[1;36mConverting {original_path_for_conversion} to {mp3_path} using ffmpeg...\033[0m")
@@ -399,7 +421,6 @@ def sound_event_detection(args):
 
     # If we reach here, 'duration' is valid (either initially or after successful conversion).
     # Proceed with the rest of the script.
-    is_video = is_video_file(audio_path)
     
     if is_video and (video_width is None or video_height is None):
         video_width = 1280

@@ -78,9 +78,15 @@ OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_taggi
 CSV_PATH="${OUTPUT_DIR}/full_event_log.csv"
 
 if [[ -f "$CSV_PATH" ]]; then
-    echo
-    echo "📊  Inference complete. Launching Shapash Correlations Dashboard..."
-    time python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
+    # Check for any .pkl file (Shapash brain) in the output directory
+    if ls "${OUTPUT_DIR}"/*.pkl >/dev/null 2>&1; then
+        echo
+        echo "📊  Shapash brain already exists in ${OUTPUT_DIR}. Skipping dashboard launch."
+    else
+        echo
+        echo "📊  Inference complete. Launching Shapash Correlations Dashboard..."
+        time python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
+    fi
 else
     echo
     echo "⚠️  Warning: full_event_log.csv not found at $CSV_PATH. Skipping dashboard."
