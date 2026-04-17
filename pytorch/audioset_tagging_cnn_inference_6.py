@@ -1174,7 +1174,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.7.2. Material Changes: \n * Broken the 'Aggregation Bottleneck': High-res data (100 FPS) is now streamed directly to disk (CSV) during inference.\n * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. ")
+    print(f"Eventogrammer, version 6.7.6. Material Changes:  * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. * Improved idempotency. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
