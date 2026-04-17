@@ -1157,7 +1157,7 @@ if __name__ == '__main__':
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
-
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
     print(f"Notes: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU.") 
     print(f"If the file is too long, use e.g. this to split:") 
@@ -1188,7 +1188,7 @@ if __name__ == '__main__':
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
     
 
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    
 
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
