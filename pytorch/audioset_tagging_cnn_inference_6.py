@@ -579,13 +579,18 @@ def sound_event_detection(args):
     stft = np.concatenate(stft_vis_list, axis=1) # Correctly concatenate STFT chunks
     del framewise_vis_list
     del stft_vis_list
-    del waveform
     
     # Update frame metadata for downsampled resolution
     frames_per_second = vis_fps 
     frames_num = len(framewise_output)
     
+    # --- OPTION 2: Use the real data length as the source of truth for duration ---
+    # This fixes issues with VBR files where ffprobe guesses the duration incorrectly.
+    duration = frames_num / frames_per_second
+    
     print(f'Aggregation complete. Internal RAM resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
+    print(f'Real duration from data: \033[1;34m{duration:.2f}s\033[1;0m')
+
     # Static PNG visualization
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_k = 10
@@ -634,9 +639,11 @@ def sound_event_detection(args):
 
     tick_interval = max(5, int(duration / 20))
     x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
-    x_labels = np.arange(0, int(duration) + 1, tick_interval)
+    # Derive labels directly from ticks to guarantee length match
+    x_labels = [int(t / frames_per_second) for t in x_ticks]
+    
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels(x_labels[:len(x_ticks)], rotation=45, ha='right', fontsize=10)
+    axs[1].xaxis.set_ticklabels(x_labels, rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num)
     
     axs[1].set_yticks(np.arange(0, top_k))
@@ -1174,7 +1181,7 @@ if __name__ == '__main__':
     #Hard code the output's frequency:
     output_fps = 25
 
-    print(f"Eventogrammer, version 6.7.6. Material Changes:  * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. * Improved idempotency. ")
+    print(f"Eventogrammer, version 6.7.7. Material Changes:  * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. * Fixed Matplotlib ValueError on VBR files by recalculating duration from processed frames. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
