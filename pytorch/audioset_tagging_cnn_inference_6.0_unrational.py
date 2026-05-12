@@ -286,10 +286,6 @@ def audio_tagging(args):
     return clipwise_output, labels
 
 def sound_event_detection(args):
-    output_fps = args.output_fps
-    vis_fps = args.vis_fps
-    adaptive_lookahead = args.adaptive_lookahead
-    
     sample_rate = args.sample_rate
     window_size = args.window_size
     hop_size = args.hop_size
@@ -522,6 +518,7 @@ def sound_event_detection(args):
     chunk_samples = int(chunk_duration * sample_rate)
     
     # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
+    vis_fps = 2  # Target 2 FPS for visualization as suggested
     frames_per_second = sample_rate // hop_size
     vis_downsample = frames_per_second // vis_fps
     
@@ -878,192 +875,274 @@ def sound_event_detection(args):
     
 
 
-    # --- RATIONALIZED VIDEO RENDERING PIPELINE ---
-    if args.dynamic_eventogram or args.static_eventogram:
-        print(f"🎞  Initializing video rendering pipeline ({output_fps} FPS)…")
+    # Video rendering
+    # Force output FPS to 30 for faster rendering and smaller files
+    output_fps = 30
+
+    if args.dynamic_eventogram:
+        output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
+        print(f"🎞  Rendering dynamic eventogram video at {output_fps} FPS…")
         
-        # 1. Define the rendering strategy based on user flags
-        if args.dynamic_eventogram:
-            output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
-            window_duration = args.window_duration
-            window_frames = int(window_duration * frames_per_second)
-            half_window_frames = window_frames // 2 
+        window_duration = args.window_duration
+        window_frames = int(window_duration * frames_per_second)
+        half_window_frames = window_frames // 2
 
-            # PRECOMPUTE: Map data points to acoustic windows once
-            print(f"📊  Precomputing {frames_num} acoustic windows (Adaptive={args.use_adaptive_window})…")
-            precomputed_data = []
-            for i in range(frames_num):
-                start_f = max(0, i - half_window_frames)
-                end_f = min(frames_num, i + half_window_frames)
-                
-                if args.use_adaptive_window:
-                    kl_threshold = 0.5
-                    for offset in range(half_window_frames, half_window_frames + int(adaptive_lookahead * frames_per_second), int(frames_per_second)):
-                        if start_f - offset >= 0:
-                            prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
-                            curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
-                            if compute_kl_divergence(prev_p, curr_p) > kl_threshold:
-                                start_f = max(0, start_f - offset // 2); break
-                        if end_f + offset < frames_num:
-                            curr_p = np.mean(framewise_output[end_f-offset:end_f], axis=0)
-                            next_p = np.mean(framewise_output[end_f:end_f+offset], axis=0)
-                            if compute_kl_divergence(curr_p, next_p) > kl_threshold:
-                                end_f = min(frames_num, end_f + offset // 2); break
-                
-                win_out, win_idxs = get_dynamic_top_events(framewise_output, start_f, end_f, top_k)
-                if win_out.size == 0:
-                    win_out = np.zeros((end_f - start_f, top_k))
-                    win_idxs = sorted_indexes[:top_k]
-                
-                precomputed_data.append({'start': start_f, 'end': end_f, 'out': win_out, 'idxs': win_idxs})
-
-            # Setup Persistent Figure for Sprint Speed (0 new objects created in loop)
-            fig_fr = plt.figure(figsize=(fig_width_px/dpi, fig_height_px/dpi), dpi=dpi)
-            gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, 
-                                        top=0.95, bottom=0.08, hspace=0.05)
-            axs_fr = [fig_fr.add_subplot(gs_fr[0]), fig_fr.add_subplot(gs_fr[1])]
+        # 1. Precompute ALL unique data windows at the data's native resolution (frames_per_second, e.g., 2 FPS)
+        # This eliminates redundant KL divergence calculations and top-event searches.
+        print(f"📊  Precomputing data windows for {frames_num} unique time points…")
+        precomputed_data = []
+        for i in range(frames_num):
+            current_frame = i
+            start_f = max(0, current_frame - half_window_frames)
+            end_f = min(frames_num, current_frame + half_window_frames)
             
-            # Pre-calculate global spectrogram normalization for consistent visibility
-            stft_log = np.log(stft + 1e-10)
-            v_min, v_max = np.percentile(stft_log, [1, 99]) # robust range
-
-            # Initialize persistent artists with dummy data and FIXED RANGE
-            im_spec = axs_fr[0].imshow(np.zeros((stft.shape[0], 2)), origin='lower', aspect='auto', 
-                                       cmap='jet', vmin=v_min, vmax=v_max)
-            im_event = axs_fr[1].imshow(np.zeros((top_k, 2)), origin='upper', aspect='auto', 
-                                        cmap='jet', vmin=0, vmax=1)
-            marker_lines = [ax.axvline(x=0, color='red', linewidth=2, alpha=0.8) for ax in axs_fr]
+            # Adaptive window size (if enabled)
+            if args.use_adaptive_window:
+                kl_threshold = 0.5
+                # Look back and ahead to find acoustic boundaries
+                for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
+                    if start_f - offset >= 0:
+                        prev_prob = np.mean(framewise_output[start_f - offset:start_f], axis=0)
+                        curr_prob = np.mean(framewise_output[start_f:start_f + offset], axis=0)
+                        kl_div = compute_kl_divergence(prev_prob, curr_prob)
+                        if kl_div > kl_threshold:
+                            start_f = max(0, start_f - offset // 2)
+                            break
+                    if end_f + offset < frames_num:
+                        curr_prob = np.mean(framewise_output[end_f - offset:end_f], axis=0)
+                        next_prob = np.mean(framewise_output[end_f:end_f + offset], axis=0)
+                        kl_div = compute_kl_divergence(curr_prob, next_prob)
+                        if kl_div > kl_threshold:
+                            end_f = min(frames_num, end_f + offset // 2)
+                            break
             
-            axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
-            axs_fr[1].set_xlabel('Seconds', fontsize=14)
-            axs_fr[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-            axs_fr[0].tick_params(labelbottom=False, labeltop=False, bottom=False, top=False)
-            
-            last_idxs = {"val": None} # Cache for labels
+            window_out, window_idxs = get_dynamic_top_events(framewise_output, start_f, end_f, top_k)
+            if window_out.size == 0:
+                window_out = np.zeros((end_f - start_f, top_k))
+                window_idxs = sorted_indexes[:top_k]
+                
+            precomputed_data.append({
+                'start_f': start_f,
+                'end_f': end_f,
+                'window_out': window_out,
+                'window_idxs': window_idxs
+            })
 
-            def draw_strategy(i):
-                data = precomputed_data[i]
-                s_f, e_f = data['start'], data['end']
-                t_start, t_end = s_f / frames_per_second, e_f / frames_per_second
-                t_curr = i / frames_per_second
-                
-                # 1. High-Speed Data Updates (Artist updates)
-                im_spec.set_data(stft_log[:, s_f:e_f])
-                im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
-                
-                im_event.set_data(data['out'].T)
-                im_event.set_extent([t_start, t_end, 0, top_k])
-                
-                # 2. Conditional UI Updates (Only update labels if they changed)
-                if last_idxs["val"] is None or not np.array_equal(last_idxs["val"], data['idxs']):
-                    axs_fr[1].set_yticks(np.arange(0.5, top_k + 0.5))
-                    axs_fr[1].set_yticklabels(np.array(labels)[data['idxs']][::-1], fontsize=14)
-                    last_idxs["val"] = data['idxs']
-                
-                # 3. Synchronized Timeline and Marker
-                axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t_curr:.1f}s)', fontsize=14)
-                for ax, line in zip(axs_fr, marker_lines):
-                    ax.set_xlim(t_start, t_end)
-                    line.set_xdata([t_curr, t_curr])
-                
-                fig_fr.canvas.draw()
-                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
-
-        else: # Static Eventogram
-            output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
-            base_img = plt.imread(fig_path)
-            if base_img.dtype == np.float32: base_img = (base_img * 255).astype(np.uint8)
-            base_img = base_img[:, :, :3] # Drop alpha
-            h, w, _ = base_img.shape
-            x_start, x_end = int(left_frac * w), w
-
-            def draw_strategy(i):
-                img = base_img.copy()
-                marker_x = int(x_start + (x_end - x_start) * (i / max(frames_num - 1, 1)))
-                img[:, max(0, marker_x-1):min(w, marker_x+1)] = [255, 0, 0]
-                return img
-
-        # 2. SMART CACHE LAYER (Universal)
+        # 2. Optimized Frame Generation with Caching
+        # We cache the last rendered image. Since the video FPS (30) is much higher than 
+        # the data FPS (2), most calls to make_frame will return the cached image.
         frame_cache = {"last_i": -1, "last_img": None}
 
         def make_frame(t):
-            i = min(int(t * frames_per_second), frames_num - 1)
+            # Map video time to our data frame index
+            i = int(t * frames_per_second)
+            i = min(i, frames_num - 1)
+            
+            # If the data frame hasn't changed, return the cached image immediately
             if i == frame_cache["last_i"]:
                 return frame_cache["last_img"]
             
-            img = draw_strategy(i)
-            frame_cache.update({"last_i": i, "last_img": img})
+            # Retrieve precomputed window data
+            data = precomputed_data[i]
+            start_f, end_f = data['start_f'], data['end_f']
+            window_output, window_indexes = data['window_out'], data['window_idxs']
+            
+            # Create the figure using OO API for better performance/safety
+            fig_fr = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
+            gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, 
+                                        top=0.95, bottom=0.08, hspace=0.05)
+            axs_fr = [fig_fr.add_subplot(gs_fr[0]), fig_fr.add_subplot(gs_fr[1])]
+
+            # Calculate a stable timestamp for the title
+            t_stable = i / frames_per_second
+            
+            # Render Spectrogram for window
+            stft_window = stft[:, start_f:end_f]
+            axs_fr[0].matshow(np.log(stft_window + 1e-10), origin='lower', aspect='auto', cmap='jet')
+            axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
+            axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t_stable:.1f}s)', fontsize=14)
+
+            # Render Eventogram for window
+            axs_fr[1].matshow(window_output.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+            window_labels = np.array(labels)[window_indexes]
+            axs_fr[1].yaxis.set_ticks(np.arange(0, top_k))
+            axs_fr[1].yaxis.set_ticklabels(window_labels, fontsize=14)
+            axs_fr[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+            axs_fr[1].set_xlabel('Seconds', fontsize=14)
+            axs_fr[1].xaxis.set_ticks_position('bottom')
+
+            # Adjust x-axis ticks to show absolute time in seconds
+            window_seconds = (end_f - start_f) / frames_per_second
+            tick_interval_window = max(1, int(window_seconds / 5))
+            x_ticks_window = np.arange(0, end_f - start_f + 1, frames_per_second * tick_interval_window)
+            x_labels_window = np.arange(int(start_f / frames_per_second), 
+                                        int(end_f / frames_per_second) + 1, 
+                                        tick_interval_window)
+            
+            for ax in axs_fr:
+                ax.xaxis.set_ticks(x_ticks_window)
+                ax.xaxis.set_ticklabels(x_labels_window[:len(x_ticks_window)], rotation=45, ha='right', fontsize=10)
+                ax.set_xlim(0, end_f - start_f)
+
+            # Add marker (at the current frame's position relative to the window)
+            marker_x = i - start_f
+            for ax in axs_fr:
+                ax.axvline(x=marker_x, color='red', linewidth=2, alpha=0.8)
+
+            # Draw and convert to image
+            fig_fr.canvas.draw()
+            img = np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8)
+            img = img.reshape((fig_height_px, fig_width_px, 4))[:, :, :3]  # Drop alpha
+            plt.close(fig_fr)
+            
+            # Update cache
+            frame_cache["last_i"] = i
+            frame_cache["last_img"] = img
             return img
 
-        # 3. UNIFIED EXPORT
+        # Use VideoClip to generate the dynamic video
         eventogram_clip = VideoClip(make_frame, duration=duration)
         audio_clip = AudioFileClip(video_input_path)
-        final_clip = eventogram_clip.with_audio(audio_clip)
-        final_clip.fps = output_fps
-        
-        final_clip.write_videofile(output_video_path, codec="libx264", fps=output_fps, threads=os.cpu_count())
-        print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
-        if args.dynamic_eventogram: plt.close(fig_fr) # Cleanup persistent figure
+        eventogram_with_audio_clip = eventogram_clip.with_audio(audio_clip)
+        eventogram_with_audio_clip.fps = output_fps
 
-        # 4. OVERLAY (If source was video)
+        eventogram_with_audio_clip.write_videofile(
+            output_video_path,
+            codec="libx264",
+            fps=output_fps,
+            threads=os.cpu_count()
+        )
+        print(f"🎹 Saved the dynamic eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
+
+    if args.static_eventogram:    
+        print(f"🎞  Rendering static eventogram video …")
+        output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+        
+        # 1. Load the base static image as a NumPy array once
+        # Using the actual generated PNG ensures we have the correct final dimensions and margins.
+        base_img = plt.imread(fig_path)
+        # Handle alpha if present and convert to uint8 (0-255)
+        if base_img.dtype == np.float32:
+            base_img = (base_img * 255).astype(np.uint8)
+        if base_img.shape[2] == 4:
+            base_img = base_img[:, :, :3]
+            
+        h, w, _ = base_img.shape
+        x_start = int(left_frac * w)
+        x_end = w
+        
+        # 2. Optimized Frame Generation with 2 FPS Marker Caching
+        # Jerkiness is accepted for speed; marker only moves when data 'ticks'.
+        frame_cache_static = {"last_i": -1, "last_img": None}
+
+        def make_frame_static(t):
+            # Map video time to our data frame index (2 FPS)
+            i = int(t * frames_per_second)
+            i = min(i, frames_num - 1)
+            
+            # Return cached image if marker hasn't moved
+            if i == frame_cache_static["last_i"]:
+                return frame_cache_static["last_img"]
+            
+            # Calculate marker position based on the data frame index
+            frac = i / max(frames_num - 1, 1)
+            marker_x = int(x_start + (x_end - x_start) * frac)
+            
+            # Create frame by drawing a 2px red line on a copy of the base image
+            img = base_img.copy()
+            # Draw marker (vertical red line)
+            m_left = max(0, marker_x - 1)
+            m_right = min(w, marker_x + 1)
+            img[:, m_left:m_right] = [255, 0, 0] # Red marker
+            
+            # Update cache
+            frame_cache_static["last_i"] = i
+            frame_cache_static["last_img"] = img
+            return img
+
+        # Use VideoClip with the caching function
+        static_eventogram_clip = VideoClip(make_frame_static, duration=duration)
+        audio_clip = AudioFileClip(video_input_path)
+        eventogram_with_audio_clip = static_eventogram_clip.with_audio(audio_clip)
+        eventogram_with_audio_clip.fps = output_fps
+
+        eventogram_with_audio_clip.write_videofile(
+            output_video_path,
+            codec="libx264",
+            fps=output_fps,
+            threads=os.cpu_count()
+        )
+        print(f"🎹 Saved the static eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
+
+    if (args.dynamic_eventogram or args.static_eventogram):
         if is_video:
             print("🎬  Overlaying the source media with the created eventogram…")
-            final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
-            _, _, b_w, b_h = get_duration_and_fps(audio_path)
+            root, ext = os.path.splitext(output_video_path)
+            final_output_path = f"{root}_overlay{ext}"
+            _, _, base_w, base_h = get_duration_and_fps(audio_path)
+            _, _, ovr_w, ovr_h = get_duration_and_fps(output_video_path)
             
-            # Scale logic
-            t_w, t_h = (b_w, b_h) if b_w >= fig_width_px else (fig_width_px, int(b_h * fig_width_px / b_w))
-            if t_h % 2: t_h += 1
+            if base_w >= ovr_w:
+                target_width, target_height = base_w, base_h
+            else:
+                target_width = ovr_w
+                target_height = int(base_h * ovr_w / base_w)
+                if target_height % 2:
+                    target_height += 1
             
+            print(f"🎯 Target resolution: {target_width}x{target_height}")
+            main_input, overlay_input = audio_path, output_video_path
+
             overlay_cmd = [
-                "ffmpeg", "-y", "-i", audio_path, "-i", output_video_path, "-loglevel", "warning",
-                "-filter_complex", (
-                    f"[0:v]scale={t_w}:{t_h}[main];"
-                    f"[1:v]scale={t_w}:{int(t_h * args.overlay_size)}[ovr];"
+                "ffmpeg", "-y",
+                "-i", main_input,
+                "-i", overlay_input,
+                "-loglevel", "warning",
+                "-filter_complex",
+                (
+                    f"[0:v]scale={target_width}:{target_height}[main];"
+                    f"[1:v]scale={target_width}:{int(target_height * args.overlay_size)}[ovr];"
                     f"[ovr]format=rgba,colorchannelmixer=aa={args.translucency}[ovr_t];"
                     "[main][ovr_t]overlay=x=0:y=H-h[v]"
                 ),
-                "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-shortest"
+                "-map", "[v]",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
             ]
             if args.bitrate:
                 overlay_cmd.extend(["-b:v", args.bitrate])
             else:
                 overlay_cmd.extend(["-crf", str(args.crf)])
-            overlay_cmd.append(final_overlay_path)
-            
+            overlay_cmd.extend([
+                "-c:a", "aac",
+                "-shortest",
+                final_output_path
+            ])
+
             try:
                 subprocess.run(overlay_cmd, check=True)
-                print(f"✅ 🎥 Final overlay saved to: \033[1;34m{final_overlay_path}\033[1;0m")
+                print(f"✅ 🎥 The overlaid video has been saved to: \033[1;34m{final_output_path}\033[1;0m")
             except subprocess.CalledProcessError as e:
                 print(f"\033[1;31mError during FFmpeg overlay: {e}\033[0m")
+                return
             
-            if temp_video_path and os.path.exists(temp_video_path): os.remove(temp_video_path)
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.remove(temp_video_path)
+                except:
+                    pass
         else:
             print("🎧 Source is audio-only, no overlay video created.")
 
+
+    
     print(f"⏲  🗃️  Reminder: input file duration: \033[1;34m{duration}\033[0m")
 
 if __name__ == '__main__':
 
 
-    parser = argparse.ArgumentParser(
-        description='Audio tagging and Sound event detection.',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="""
-Note on the models:
-* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): 
-  Designed for SED. Maintains time dimension through the classifier. 
-  Outputs framewise_output for 'Eventograms' and CSV logs.
-* Other models (e.g., Cnn14, Wavegram_Logmel_Cnn14) are optimized for audio tagging.
-  Use the '--mode audio_tagging' switch for these.
-
-Technical Notes:
-* Processing time ratio: ~15s of audio takes ~1s to process on a 300 GFLOPs, 4-core CPU.
-* RAM Optimization: Internal structures are max-pooled to 2 FPS.
-* Video rendering is data-synchronous and cached for speed.
-"""
-    )
+    parser = argparse.ArgumentParser(description='Audio tagging and Sound event detection.')
     parser.add_argument('audio_path', type=str, help='Path to the media file')
     parser.add_argument('--mode', choices=['audio_tagging', 'sound_event_detection'],
                         default='sound_event_detection', help='Select the processing mode')
@@ -1073,9 +1152,9 @@ Technical Notes:
     parser.add_argument('--mel_bins', type=int, default=64)
     parser.add_argument('--fmin', type=int, default=50)
     parser.add_argument('--fmax', type=int, default=14000)
-    parser.add_argument('--model_type', type=str, required=True, help='Model architecture type')
-    parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to pretrained .pth file')
-    parser.add_argument('--cuda', action='store_true', default=False, help='Use CUDA for inference')
+    parser.add_argument('--model_type', type=str, required=True)
+    parser.add_argument('--checkpoint_path', type=str, required=True)
+    parser.add_argument('--cuda', action='store_true', default=False)
     parser.add_argument('--translucency', type=float, default=0.7,
                         help='Overlay translucency (0 to 1)')
     parser.add_argument('--overlay_size', type=float, default=0.2,
@@ -1091,26 +1170,18 @@ Technical Notes:
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
     parser.add_argument('--csv_fps', type=int, default=5,
-                        help='FPS to write to full_event_log.csv. '
+                        help='FPS to write to full_event_log.csv (default 5). '
                              'Use 100 for full resolution (very large file). '
                              '5 is enough for Shapash + outlier detection.')
-    parser.add_argument('--vis_fps', type=int, default=5,
-                        help='FPS for internal RAM-based visualization data (RAM guard)')
-    parser.add_argument('--output_fps', type=int, default=30,
-                        help='FPS for the final rendered video output')
-    parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
-                        help='Max seconds to look ahead/back for acoustic boundaries in adaptive mode')
                         
-
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(1)
 
     args = parser.parse_args()
     
     audio_path = args.audio_path  # <-- extract it
+    #Hard code the output's frequency:
+    output_fps = 25
 
-    print(f"Eventogrammer, version 6.8.6. Material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. ")
+    print(f"Eventogrammer, version 6.7.7. Material Changes:  * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. * Fixed Matplotlib ValueError on VBR files by recalculating duration from processed frames. ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 

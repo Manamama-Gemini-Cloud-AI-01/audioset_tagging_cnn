@@ -286,9 +286,8 @@ def audio_tagging(args):
     return clipwise_output, labels
 
 def sound_event_detection(args):
-    output_fps = args.output_fps
-    vis_fps = args.vis_fps
-    adaptive_lookahead = args.adaptive_lookahead
+    # Standard output frame rate for all rendered videos
+    output_fps = 30
     
     sample_rate = args.sample_rate
     window_size = args.window_size
@@ -522,6 +521,7 @@ def sound_event_detection(args):
     chunk_samples = int(chunk_duration * sample_rate)
     
     # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
+    vis_fps = 2  # Target 2 FPS for visualization as suggested
     frames_per_second = sample_rate // hop_size
     vis_downsample = frames_per_second // vis_fps
     
@@ -887,7 +887,7 @@ def sound_event_detection(args):
             output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
             window_duration = args.window_duration
             window_frames = int(window_duration * frames_per_second)
-            half_window_frames = window_frames // 2 
+            half_window_frames = window_frames // 2
 
             # PRECOMPUTE: Map data points to acoustic windows once
             print(f"📊  Precomputing {frames_num} acoustic windows (Adaptive={args.use_adaptive_window})…")
@@ -898,7 +898,7 @@ def sound_event_detection(args):
                 
                 if args.use_adaptive_window:
                     kl_threshold = 0.5
-                    for offset in range(half_window_frames, half_window_frames + int(adaptive_lookahead * frames_per_second), int(frames_per_second)):
+                    for offset in range(half_window_frames, half_window_frames + int(30 * frames_per_second), int(frames_per_second)):
                         if start_f - offset >= 0:
                             prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
                             curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
@@ -917,29 +917,11 @@ def sound_event_detection(args):
                 
                 precomputed_data.append({'start': start_f, 'end': end_f, 'out': win_out, 'idxs': win_idxs})
 
-            # Setup Persistent Figure for Sprint Speed (0 new objects created in loop)
+            # Setup Persistent Figure for Speed (Reuse one object instead of creating 701)
             fig_fr = plt.figure(figsize=(fig_width_px/dpi, fig_height_px/dpi), dpi=dpi)
             gs_fr = fig_fr.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, 
                                         top=0.95, bottom=0.08, hspace=0.05)
             axs_fr = [fig_fr.add_subplot(gs_fr[0]), fig_fr.add_subplot(gs_fr[1])]
-            
-            # Pre-calculate global spectrogram normalization for consistent visibility
-            stft_log = np.log(stft + 1e-10)
-            v_min, v_max = np.percentile(stft_log, [1, 99]) # robust range
-
-            # Initialize persistent artists with dummy data and FIXED RANGE
-            im_spec = axs_fr[0].imshow(np.zeros((stft.shape[0], 2)), origin='lower', aspect='auto', 
-                                       cmap='jet', vmin=v_min, vmax=v_max)
-            im_event = axs_fr[1].imshow(np.zeros((top_k, 2)), origin='upper', aspect='auto', 
-                                        cmap='jet', vmin=0, vmax=1)
-            marker_lines = [ax.axvline(x=0, color='red', linewidth=2, alpha=0.8) for ax in axs_fr]
-            
-            axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
-            axs_fr[1].set_xlabel('Seconds', fontsize=14)
-            axs_fr[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-            axs_fr[0].tick_params(labelbottom=False, labeltop=False, bottom=False, top=False)
-            
-            last_idxs = {"val": None} # Cache for labels
 
             def draw_strategy(i):
                 data = precomputed_data[i]
@@ -947,27 +929,33 @@ def sound_event_detection(args):
                 t_start, t_end = s_f / frames_per_second, e_f / frames_per_second
                 t_curr = i / frames_per_second
                 
-                # 1. High-Speed Data Updates (Artist updates)
-                im_spec.set_data(stft_log[:, s_f:e_f])
-                im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
+                for ax in axs_fr: ax.clear()
                 
-                im_event.set_data(data['out'].T)
-                im_event.set_extent([t_start, t_end, 0, top_k])
+                # 1. Spectrogram (imshow with extent fixes 'halved seconds')
+                stft_window = stft[:, s_f:e_f]
+                axs_fr[0].imshow(np.log(stft_window + 1e-10), extent=[t_start, t_end, 0, stft.shape[0]], 
+                                 origin='lower', aspect='auto', cmap='jet')
+                axs_fr[0].set_ylabel('Frequency bins', fontsize=14)
+                axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t_curr:.1f}s)', fontsize=14)
+                axs_fr[0].tick_params(labelbottom=False)
                 
-                # 2. Conditional UI Updates (Only update labels if they changed)
-                if last_idxs["val"] is None or not np.array_equal(last_idxs["val"], data['idxs']):
-                    axs_fr[1].set_yticks(np.arange(0.5, top_k + 0.5))
-                    axs_fr[1].set_yticklabels(np.array(labels)[data['idxs']][::-1], fontsize=14)
-                    last_idxs["val"] = data['idxs']
+                # 2. Eventogram
+                axs_fr[1].imshow(data['out'].T, extent=[t_start, t_end, 0, top_k], 
+                                 origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
+                axs_fr[1].set_yticks(np.arange(0.5, top_k + 0.5))
+                axs_fr[1].set_yticklabels(np.array(labels)[data['idxs']][::-1], fontsize=14)
+                axs_fr[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
+                axs_fr[1].set_xlabel('Seconds', fontsize=14)
                 
                 # 3. Synchronized Timeline and Marker
-                axs_fr[0].set_title(f'Spectrogram and Eventogram (t={t_curr:.1f}s)', fontsize=14)
-                for ax, line in zip(axs_fr, marker_lines):
+                for ax in axs_fr:
                     ax.set_xlim(t_start, t_end)
-                    line.set_xdata([t_curr, t_curr])
+                    ax.axvline(x=t_curr, color='red', linewidth=2, alpha=0.8)
                 
                 fig_fr.canvas.draw()
-                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
+                # Use buffer_rgba() for raw access to the canvas
+                img = np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
+                return img
 
         else: # Static Eventogram
             output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
@@ -1094,12 +1082,6 @@ Technical Notes:
                         help='FPS to write to full_event_log.csv. '
                              'Use 100 for full resolution (very large file). '
                              '5 is enough for Shapash + outlier detection.')
-    parser.add_argument('--vis_fps', type=int, default=5,
-                        help='FPS for internal RAM-based visualization data (RAM guard)')
-    parser.add_argument('--output_fps', type=int, default=30,
-                        help='FPS for the final rendered video output')
-    parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
-                        help='Max seconds to look ahead/back for acoustic boundaries in adaptive mode')
                         
 
     if len(sys.argv) == 1:
@@ -1109,8 +1091,10 @@ Technical Notes:
     args = parser.parse_args()
     
     audio_path = args.audio_path  # <-- extract it
+    #Hard code the output's frequency:
+    output_fps = 25
 
-    print(f"Eventogrammer, version 6.8.6. Material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. ")
+    print(f"Eventogrammer, version 6.8.1. Material Changes:  * 50x RAM Optimization: Internal RAM structures (Eventogram/Spectrogram) are now max-pooled to 2 FPS. * Fixed Matplotlib ValueError on VBR files by recalculating duration from processed frames. Logic of MP4 eventograms rationalized, but still slow.    ")
     
     # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
 
