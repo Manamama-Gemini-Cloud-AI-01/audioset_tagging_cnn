@@ -286,6 +286,7 @@ def audio_tagging(args):
     return clipwise_output, labels
 
 def sound_event_detection(args):
+    # --- PHASE 0: Setup & Environment ---
     output_fps = args.output_fps
     vis_fps = args.vis_fps
     adaptive_lookahead = args.adaptive_lookahead
@@ -299,6 +300,7 @@ def sound_event_detection(args):
     model_type = args.model_type
     checkpoint_path = args.checkpoint_path
     audio_path = args.audio_path
+    overlay_source_path = audio_path  # Preserve original for final video overlay
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
 
     print(f"Using device: {device}")
@@ -316,9 +318,8 @@ def sound_event_detection(args):
     output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
 
-    # --- Copy AI analysis guide ---
+    # --- PHASE 1: Dependency Injection (AI Guide) ---
     try:
-        # Using a relative path from the script's location
         script_dir = os.path.dirname(os.path.abspath(__file__))
         guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'auditory_cognition_guide_template.md'))
         guide_dest_path = os.path.join(output_dir, 'auditory_cognition_guide_template.md')
@@ -331,14 +332,10 @@ def sound_event_detection(args):
     except Exception as e:
         print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
-
-
-        
-
     base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
     fig_path = os.path.join(output_dir, 'eventogram.png')
 
-    # --- Idempotency Check (Context-Aware Skipping) ---
+    # --- PHASE 2: Idempotency Check ---
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
     is_video = is_video_file(audio_path)
     
@@ -346,32 +343,23 @@ def sound_event_detection(args):
     required_files = [csv_path]
     if args.static_eventogram:
         vid_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
-        # If it's a video file, the final result is the overlay
-        if is_video:
-            root, ext = os.path.splitext(vid_path)
-            required_files.append(f"{root}_overlay{ext}")
-        else:
-            required_files.append(vid_path)
+        required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
             
     if args.dynamic_eventogram:
         vid_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
-        if is_video:
-            root, ext = os.path.splitext(vid_path)
-            required_files.append(f"{root}_overlay{ext}")
-        else:
-            required_files.append(vid_path)
+        required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
             
     if all(os.path.exists(f) for f in required_files):
         print(f"✅ Skipping {audio_path}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         return
 
-    # '''    
+    # Check for sufficient disk space
     disk_usage = shutil.disk_usage(audio_dir)
     if disk_usage.free < 1e9:
         print(f"\033[1;31mError: Insufficient disk space ({disk_usage.free / 1e9:.2f} GB free). Exiting.\033[0m")
         return
-    #'''
     
+    # --- PHASE 3: Model Loading ---
     Model = eval(model_type)
     model = Model(sample_rate=sample_rate, window_size=window_size, 
                   hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
@@ -384,54 +372,32 @@ def sound_event_detection(args):
         print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
         return
 
+    # --- PHASE 4: Media Integrity & Metadata Extraction ---
     duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
     
-    # Check if duration is problematic (None or 0)
+    # Recovery: Attempt conversion to MP3 if duration detection fails
     if duration is None or duration == 0:
-        print(f"\033[1;33mWarning: Initial duration detection for {audio_path} returned {duration}. Attempting conversion to MP3.\033[0m")
-        original_path_for_conversion = audio_path # Keep original path for ffmpeg input
-        audio_dir = os.path.dirname(original_path_for_conversion)
-        base_filename_conv = get_filename(original_path_for_conversion)
-        
-        # New MP3 path in temporary directory
-        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_conv}_converted.mp3")
+        print(f"\033[1;33mWarning: Duration probe failed for {audio_path}. Attempting MP3 recovery...\033[0m")
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_for_dir}_recovered.mp3")
 
         try:
-            print(f"\033[1;36mConverting {original_path_for_conversion} to {mp3_path} using ffmpeg...\033[0m")
-            subprocess.run(
-                ['ffmpeg', '-i', original_path_for_conversion, '-y', mp3_path],
-                check=True, capture_output=True, text=True
-            )
-            print(f"\033[1;32mSuccessfully converted to {mp3_path}. Re-probing duration from the new MP3.\033[0m")
-            
-            # Update audio_path to point to the newly converted MP3 for all subsequent operations
-            audio_path = mp3_path
-            
-            # Re-run duration detection on the converted file
+            subprocess.run(['ffmpeg', '-i', audio_path, '-y', mp3_path], check=True, capture_output=True)
+            audio_path = mp3_path # Rest of the script uses this recovered file
             duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
             
             if duration is None or duration == 0:
-                print(f"\033[1;31mError: Could not determine duration for {audio_path}, even after conversion. Exiting.\033[0m")
+                print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
                 return
-            else:
-                print(f"\033[1;32mConversion successful, new duration detected: {duration} seconds.\033[0m")
-
-        except subprocess.CalledProcessError as e:
-            print(f"\033[1;31mError: FFmpeg conversion failed for {original_path_for_conversion}. Stderr: {e.stderr}\033[0m")
-            return
         except Exception as e:
-            print(f"\033[1;31mAn unexpected error occurred during conversion: {e}\033[0m")
+            print(f"\033[1;31mRecovery conversion failed: {e}\033[0m")
             return
 
-    # If we reach here, 'duration' is valid (either initially or after successful conversion).
-    # Proceed with the rest of the script.
-    
     if is_video and (video_width is None or video_height is None):
-        video_width = 1280
-        video_height = 720
-        print(f"\033[1;33mWarning: Video dimensions not detected, using default {video_width}x{video_height}.\033[0m")
+        video_width, video_height = 1280, 720
+        print(f"\033[1;33mWarning: Video dimensions not detected, using default 1280x720.\033[0m")
     
-    video_input_path = audio_path
+    # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
+    video_input_path = audio_path # Variable for the file we actually feed to torchaudio
     temp_video_path = None
     if is_video:
         result = subprocess.run(
@@ -441,94 +407,61 @@ def sound_event_detection(args):
         data = json.loads(result.stdout)
         if data.get('streams'):
             stream = data['streams'][0]
-            r_frame_rate = stream.get('r_frame_rate')
-            avg_frame_rate = stream.get('avg_frame_rate')
-            if r_frame_rate and avg_frame_rate:
-                r_num, r_den = map(int, r_frame_rate.split('/'))
-                avg_num, avg_den = map(int, avg_frame_rate.split('/'))
-                r_fps = r_num / r_den if r_den else 0
-                avg_fps = avg_num / avg_den if avg_den else 0
-                if abs(r_fps - avg_fps) > 0.01:
-                    print("\033[1;33mDetected VFR video (r_frame_rate={r_fps:.3f}, avg_frame_rate={avg_fps:.3f}). Re-encoding to CFR.\033[0m")
-                    temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{get_filename(audio_path)}.mp4')
-                    try:
-                        target_fps = video_fps
-                        if not target_fps or target_fps <= 0:
-                            if r_fps > 0:
-                                target_fps = r_fps
-                                print(f"\033[1;33mWarning: avg_frame_rate is invalid, falling back to r_frame_rate: {target_fps:.3f}\033[0m")
-                            else:
-                                target_fps = output_fps
-                                print(f"\033[1;33mWarning: Both avg_frame_rate and r_frame_rate are invalid, falling back to default FPS: {target_fps}\033[0m")
-                        
-                        subprocess.run([
-                            'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
-                        ], check=True)
-                        video_input_path = temp_video_path
-                        print(f"Re-encoded to: \033[1;34m{temp_video_path}\033[1;0m")
-                    except subprocess.CalledProcessError as e:
-                        print(f"\033[1;31mError during VFR-to-CFR conversion: {e}\033[0m")
-                        return
+            r_num, r_den = map(int, stream.get('r_frame_rate', '0/1').split('/'))
+            avg_num, avg_den = map(int, stream.get('avg_frame_rate', '0/1').split('/'))
+            r_fps = r_num / r_den if r_den else 0
+            avg_fps = avg_num / avg_den if avg_den else 0
+            
+            if abs(r_fps - avg_fps) > 0.01:
+                print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{avg_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
+                temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
+                target_fps = video_fps if video_fps and video_fps > 0 else output_fps
+                subprocess.run([
+                    'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
+                ], check=True)
+                video_input_path = temp_video_path
 
+    # --- PHASE 6: Waveform Loading (Sanitary Gate) ---
     try:
         waveform, sr = torchaudio.load(video_input_path)
     except Exception as e:
-        print(f"\033[1;33mWarning: Failed to load audio directly ({e}). Attempting FFmpeg sanitization...\033[0m")
-        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{get_filename(audio_path)}.wav')
+        print(f"\033[1;33mWarning: Direct torchaudio load failed. Attempting PCM sanitization...\033[0m")
+        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_filename_for_dir}.wav')
         try:
-            subprocess.run([
-                'ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'
-            ], check=True)
-            
-            # Try torchaudio again on the sanitized file
+            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
             try:
                 waveform, sr = torchaudio.load(sanitized_temp_path)
-            except Exception as e2:
-                # If torchaudio still fails (common in Proot/Termux without backends), use soundfile
-                print(f"\033[1;33mWarning: torchaudio failed on sanitized file ({e2}). Falling back to soundfile...\033[0m")
+            except:
                 waveform_np, sr = sf.read(sanitized_temp_path)
-                # Convert soundfile's [samples, channels] to torch's [channels, samples]
-                waveform = torch.from_numpy(waveform_np).float()
-                if waveform.ndim == 1:
-                    waveform = waveform.unsqueeze(0)
-                else:
-                    waveform = waveform.T
-            
-            print(f"✅ Sanitization and loading successful. Loaded audio from: \033[1;34m{sanitized_temp_path}\033[1;0m")
+                waveform = torch.from_numpy(waveform_np).float().T if waveform_np.ndim > 1 else torch.from_numpy(waveform_np).float().unsqueeze(0)
             video_input_path = sanitized_temp_path
-        except subprocess.CalledProcessError as f_err:
-            print(f"\033[1;31mError: FFmpeg sanitization failed: {f_err}\033[0m")
-            return
         except Exception as generic_err:
             print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
             return
 
     import gc
-    print(f"Loaded waveform shape: {waveform.shape}, sample rate: {sr}")
     if sr != sample_rate:
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
-        gc.collect() # Clear resampling workspace
+        gc.collect()
         
-    waveform = waveform.mean(dim=0, keepdim=True)  # Convert to mono
-    waveform_np = waveform.squeeze(0).numpy()  # Convert to numpy for STFT
+    waveform = waveform.mean(dim=0, keepdim=True)  # Downmix to mono
+    waveform_np = waveform.squeeze(0).numpy() # Move to NumPy for memory-safe chunking
     
-    # --- CRITICAL: Delete torch tensors to free ~1-2GB of RAM immediately ---
+    # CRITICAL: Drop torch tensors to free significant RAM immediately (essential for Termux)
     del waveform
     gc.collect()
     waveform = waveform_np 
-    print(f"Processed waveform shape: {waveform.shape}")
 
+    # --- PHASE 7: Chunked Model Inference (Memory-Safe) ---
     chunk_duration = 180  # 3 minutes
     chunk_samples = int(chunk_duration * sample_rate)
-    
-    # --- MEMORY OPTIMIZATION: Prepare for streaming and downsampling ---
     frames_per_second = sample_rate // hop_size
     vis_downsample = frames_per_second // vis_fps
     
     framewise_vis_list = []
     stft_vis_list = []
     
-    print(f"📊  Processing in {chunk_duration/60}m chunks. CSV: {frames_per_second} FPS | RAM/Vis: {vis_fps} FPS")
+    print(f"📊  Starting inference in {chunk_duration/60}m chunks. Disk: {frames_per_second} FPS | RAM: {vis_fps} FPS")
 
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -536,10 +469,9 @@ def sound_event_detection(args):
         
         for start in range(0, len(waveform), chunk_samples):
             chunk = waveform[start:start + chunk_samples]
-            if len(chunk) < sample_rate // 10:
-                continue
+            if len(chunk) < sample_rate // 10: continue
             
-            # 1. Inference
+            # Step A: Inference
             chunk_tensor = move_data_to_device(torch.from_numpy(chunk[None, :]).float(), device)
             with torch.no_grad():
                 model.eval()
@@ -547,188 +479,141 @@ def sound_event_detection(args):
                     batch_output_dict = model(chunk_tensor, None)
                     chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
                 except Exception as e:
-                    print(f"\033[1;31mError in chunk at {start}: {e}\033[0m")
-                    continue
+                    print(f"\033[1;31mInference error in chunk: {e}\033[0m"); continue
             
-            # 2. Stream downsampled CSV - keeps ALL classes but makes file ~20x smaller
+            # Step B: Write high-res results to disk immediately (Lean memory)
             chunk_start_time = start / sample_rate
-            csv_downsample = max(1, frames_per_second // args.csv_fps)  # e.g. 100//5 = 20
+            csv_downsample = max(1, frames_per_second // args.csv_fps)
             for i in range(0, len(chunk_out), csv_downsample):
                 timestamp = chunk_start_time + (i / frames_per_second)
                 writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
             
-            # 3. Downsample for RAM-based Visualization (Max-Pool to preserve peaks)
-            # We use max-pooling so we don't miss short sound events in the graph
+            # Step C: Downsample for RAM-based visualization (Max-pooling preserves short events)
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
                 if len(vis_slice) > 0:
                     framewise_vis_list.append(np.max(vis_slice, axis=0))
 
-            # 4. Chunked STFT for Visualization
+            # Step D: Chunked STFT for visualization background
             chunk_tensor_stft = torch.from_numpy(chunk).to(device)
             chunk_stft = torch.stft(
                 chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
                 window=torch.hann_window(window_size).to(device),
                 center=True, return_complex=True
             ).abs().cpu().numpy()
-            
-            # Downsample STFT columns
             stft_vis_list.append(chunk_stft[:, ::vis_downsample])
             
-            print(f"Chunk at {int(chunk_start_time/60)}m done. RAM usage: {len(framewise_vis_list)} vis-frames cached.")
+            print(f"Chunk at {int(chunk_start_time/60)}m finished.")
 
-    # 5. Global Aggregation (Lean)
-    framewise_output = np.array(framewise_vis_list) # Rename for compatibility with subsequent blocks
-    stft = np.concatenate(stft_vis_list, axis=1) # Correctly concatenate STFT chunks
-    del framewise_vis_list
-    del stft_vis_list
+    # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
+    framewise_output = np.array(framewise_vis_list)
+    stft = np.concatenate(stft_vis_list, axis=1)
+    del framewise_vis_list, stft_vis_list
     
     # Update frame metadata for downsampled resolution
     frames_per_second = vis_fps 
     frames_num = len(framewise_output)
     
-    # --- OPTION 2: Use the real data length as the source of truth for duration ---
-    # This fixes issues with VBR files where ffprobe guesses the duration incorrectly.
+    # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
     duration = frames_num / frames_per_second
     
     print(f'Aggregation complete. Internal RAM resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
-    print(f'Real duration from data: \033[1;34m{duration:.2f}s\033[1;0m')
+    print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
-    # Static PNG visualization
+    # --- PHASE 9: Static Eventogram Generation (PNG) ---
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_k = 10
     top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
     top_labels = np.array(labels)[sorted_indexes[0:top_k]]
 
-    fig_width_px = 1280
-    fig_height_px = 480
-    dpi = 100
+    fig_width_px, fig_height_px, dpi = 1280, 480, 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
     
-    # 1. First Pass: Create plot to measure Y-axis label widths
+    # Pass 1: Create dummy plot to measure Y-axis label pixel width (Dynamic Margin)
     gs_init = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=0.1, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
     axs_init = [fig.add_subplot(gs_init[0]), fig.add_subplot(gs_init[1])]
-    axs_init[1].set_yticks(np.arange(0, top_k))
-    axs_init[1].set_yticklabels(top_labels, fontsize=14)
+    axs_init[1].set_yticks(np.arange(0, top_k)); axs_init[1].set_yticklabels(top_labels, fontsize=14)
     fig.canvas.draw()
     
-    renderer = fig.canvas.get_renderer()
-    max_label_width_px = 0
-    for lbl in axs_init[1].yaxis.get_majorticklabels():
-        bbox = lbl.get_window_extent(renderer=renderer)
-        w = bbox.width
-        if w > max_label_width_px:
-            max_label_width_px = w
-
-    pad_px = 8
-    left_margin_px = int(max_label_width_px + pad_px + 6)
-    fig_w_in = fig.get_size_inches()[0]
-    fig_w_px = fig_w_in * dpi
-    left_frac = left_margin_px / fig_w_px
-    if left_frac < 0: left_frac = 0.0
-    if left_frac > 0.45: left_frac = 0.45
+    max_label_width_px = max(lbl.get_window_extent(renderer=fig.canvas.get_renderer()).width for lbl in axs_init[1].yaxis.get_majorticklabels())
+    left_frac = min(0.45, (max_label_width_px + 14) / fig_width_px)
     
-    # 2. Second Pass: Final Render with correct dynamic margin
+    # Pass 2: Final Render with corrected margin
     fig.clear()
-    print(f'Computed left margin: \033[1;34m{left_margin_px}px\033[1;0m (frac: {left_frac:.3f})')
-    
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], left=left_frac, right=1.0, top=0.95, bottom=0.08, hspace=0.05)
     axs = [fig.add_subplot(gs[0]), fig.add_subplot(gs[1])]
 
     axs[0].matshow(np.log(stft + 1e-10), origin='lower', aspect='auto', cmap='jet')
-    axs[0].set_ylabel('Frequency bins', fontsize=14)
-    axs[0].set_title('Spectrogram and Eventogram', fontsize=14)
+    axs[0].set_ylabel('Freq bins', fontsize=14); axs[0].set_title('Spectrogram and Eventogram', fontsize=14)
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
     x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
-    # Derive labels directly from ticks to guarantee length match
-    x_labels = [int(t / frames_per_second) for t in x_ticks]
-    
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels(x_labels, rotation=45, ha='right', fontsize=10)
-    axs[1].set_xlim(0, frames_num)
-    
-    axs[1].set_yticks(np.arange(0, top_k))
-    axs[1].set_yticklabels(top_labels, fontsize=14)
+    axs[1].xaxis.set_ticklabels([int(t / frames_per_second) for t in x_ticks], rotation=45, ha='right', fontsize=10)
+    axs[1].set_xlim(0, frames_num); axs[1].set_yticks(np.arange(0, top_k)); axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
-    axs[1].set_xlabel('Seconds', fontsize=14)
-    axs[1].xaxis.set_ticks_position('bottom')
+    axs[1].set_xlabel('Seconds', fontsize=14); axs[1].xaxis.set_ticks_position('bottom')
     
-    plt.savefig(fig_path, bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
-    print(f'Saved visualization to: \033[1;34m{fig_path}\033[1;0m')
+    plt.savefig(fig_path, bbox_inches='tight', pad_inches=0); plt.close(fig)
+    print(f'Saved eventogram PNG to: \033[1;34m{fig_path}\033[1;0m')
 
 
 
 
-    # --- AI-Friendly Summary Generation (Event Block Detection) ---
+    # --- PHASE 10: AI-Friendly Summary Generation (Event Block Detection) ---
     print("📊  Generating AI-friendly event summary files…")
-
-    # 1. Generate summary_events.csv
     summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     
-    # Set thresholds to a very low value to capture all activity for the top classes
-    onset_threshold = 0.01  # Probability to start an event
-    offset_threshold = 0.01 # Probability to end an event
-    min_event_duration_seconds = 0.5 # Minimum duration to be considered a valid event
-    top_n_per_class = 3 # Get the top N most intense events for each sound class
+    # Event detection heuristics
+    onset_threshold, offset_threshold = 0.01, 0.01
+    min_event_duration_seconds = 0.5 
+    top_n_per_class = 3 # Only export the strongest N events per class
 
-    # Only track events for the global top_labels (from eventogram)
     events_by_class = {label: [] for label in top_labels}
 
-    # Find event blocks for each sound class, focusing only on top_labels
+    # Identify continuous blocks of sound for the top classes shown in the eventogram
     for label_idx, label in enumerate(labels):
-        if label not in top_labels: # Skip classes not in the global top_labels for the eventogram
-            continue
+        if label not in top_labels: continue
         
-        in_event = False
-        event_start_frame = 0
-        
+        in_event, event_start_frame = False, 0
         for frame_index, prob in enumerate(framewise_output[:, label_idx]):
             if not in_event and prob > onset_threshold:
-                in_event = True
-                event_start_frame = frame_index
+                in_event, event_start_frame = True, frame_index
             elif in_event and prob < offset_threshold:
                 in_event = False
-                event_end_frame = frame_index
+                duration_frames = frame_index - event_start_frame
+                duration_secs = duration_frames / frames_per_second
                 
-                duration_frames = event_end_frame - event_start_frame
-                duration_seconds = duration_frames / frames_per_second
-                
-                if duration_seconds >= min_event_duration_seconds:
-                    event_block_probs = framewise_output[event_start_frame:event_end_frame, label_idx]
-                    
+                if duration_secs >= min_event_duration_seconds:
+                    event_block_probs = framewise_output[event_start_frame:frame_index, label_idx]
                     events_by_class[label].append({
                         'sound_class': label,
                         'start_time_seconds': round(event_start_frame / frames_per_second, 3),
-                        'end_time_seconds': round(event_end_frame / frames_per_second, 3),
-                        'duration_seconds': round(duration_seconds, 3),
+                        'end_time_seconds': round(frame_index / frames_per_second, 3),
+                        'duration_seconds': round(duration_secs, 3),
                         'peak_probability': float(np.max(event_block_probs)),
                         'average_probability': float(np.mean(event_block_probs))
                     })
 
-    # Select the top N events from each class based on peak probability, then combine and sort chronologically
+    # Consolidate and sort top events chronologically
     top_events = []
     for label, events in events_by_class.items():
         if events:
-            # Sort events within the class by peak_probability
-            sorted_class_events = sorted(events, key=lambda x: x['peak_probability'], reverse=True)
-            # Add the top N events to the final list
-            top_events.extend(sorted_class_events[:top_n_per_class])
+            top_events.extend(sorted(events, key=lambda x: x['peak_probability'], reverse=True)[:top_n_per_class])
     
-    # Sort the final combined list of top events by their start time
     final_sorted_events = sorted(top_events, key=lambda x: x['start_time_seconds'])
 
     with open(summary_csv_path, 'w', newline='') as csvfile:
         fieldnames = ['sound_class', 'start_time_seconds', 'end_time_seconds', 'duration_seconds', 'peak_probability', 'average_probability']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(final_sorted_events)
+        writer.writeheader(); writer.writerows(final_sorted_events)
     print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
-    # --- Detailed AI-Friendly Event Delta Map (optimized for Attention Mechanisms) ---
-    print("📊  Generating detailed AI-friendly event delta JSON (with RLE compression)…")
+    # --- PHASE 11: Detailed AI-Friendly Event Delta Map (RLE Compression) ---
+    # This format is optimized for AI attention mechanisms: it uses Run-Length Encoding (RLE)
+    # and probability deltas to focus on "attacks" and "decays".
+    print("📊  Generating detailed AI-friendly event delta JSON (RLE optimized)…")
     json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
     ai_threshold = 0.05
     events_derivative = collections.defaultdict(list)
@@ -742,11 +627,9 @@ def sound_event_detection(args):
                 zero_count += 1
             else:
                 if zero_count > 0:
-                    zipped.append({"skip": zero_count})
-                    zero_count = 0
+                    zipped.append({"skip": zero_count}); zero_count = 0
                 zipped.append(val)
-        if zero_count > 0:
-            zipped.append({"skip": zero_count})
+        if zero_count > 0: zipped.append({"skip": zero_count})
         return zipped
 
     for label_idx, label in enumerate(labels):
@@ -758,65 +641,54 @@ def sound_event_detection(args):
                 if current_event is None:
                     current_event = {
                         "start": round(frame_index / frames_per_second, 3),
-                        "end": round(frame_index / frames_per_second, 3),
-                        "peak": float(prob),
-                        "trace": [float(prob)]
+                        "peak": float(prob), "trace": [float(prob)]
                     }
                 else:
-                    current_event["end"] = round(frame_index / frames_per_second, 3)
                     current_event["peak"] = max(current_event["peak"], float(prob))
                     current_event["trace"].append(float(prob))
-            else:
-                if current_event:
-                    # Finalize event and calculate deltas
-                    tr = current_event["trace"]
-                    deltas = [tr[0]] # Anchor
-                    for i in range(1, len(tr)):
-                        deltas.append(round(tr[i] - tr[i-1], 6))
-                    
-                    events_derivative[label].append({
-                        "start_time": current_event["start"],
-                        "end_time": current_event["end"],
-                        "peak_prob": current_event["peak"],
-                        "delta_trace": zip_trace(deltas)
-                    })
-                    current_event = None
+            elif current_event:
+                # Finalize event and calculate momentum (deltas)
+                tr = current_event["trace"]
+                deltas = [tr[0]] # Anchor point
+                for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
+                
+                events_derivative[label].append({
+                    "start_time": current_event["start"],
+                    "end_time": round(frame_index / frames_per_second, 3),
+                    "peak_prob": current_event["peak"],
+                    "delta_trace": zip_trace(deltas)
+                })
+                current_event = None
         
-        if current_event: # Finalize if trailing
+        if current_event: # Cleanup trailing event
             tr = current_event["trace"]
             deltas = [tr[0]]
-            for i in range(1, len(tr)):
-                deltas.append(round(tr[i] - tr[i-1], 6))
+            for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
             events_derivative[label].append({
                 "start_time": current_event["start"],
-                "end_time": current_event["end"],
+                "end_time": round(len(probs_stream) / frames_per_second, 3),
                 "peak_prob": current_event["peak"],
                 "delta_trace": zip_trace(deltas)
             })
 
     with open(json_ai_path, 'w') as f:
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
-    print(f'Saved AI-friendly delta JSON (compressed) to: \033[1;34m{json_ai_path}\033[1;0m')
+    print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
 
-    # --- Interactive Plotly Dashboard (Top 50 Events) ---
+    # --- PHASE 12: Interactive Plotly Dashboard (Top 50 Events) ---
     print("📊  Generating interactive Plotly dashboard…")
     html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
     
-    # 1. Identify top 50 classes by popularity (sum of probabilities)
+    # Identify top 50 classes by total popularity
     popularity = np.sum(framewise_output, axis=0)
     top_50_indices = np.argsort(popularity)[::-1][:50]
     
-    # 2. Extract and optimize data (round to 4 decimals to save space)
     times = [round(i / frames_per_second, 2) for i in range(frames_num)]
     traces_data = []
     for idx in top_50_indices:
-        probs = np.round(framewise_output[:frames_num, idx], 4).tolist()
-        traces_data.append({
-            "name": labels[idx],
-            "y": probs
-        })
+        traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
     
-    json_data = json.dumps({"times": times, "traces": traces_data})
+    json_payload = json.dumps({"times": times, "traces": traces_data})
     plotly_js = pyo.get_plotlyjs()
     
     html_content = f"""
@@ -824,7 +696,7 @@ def sound_event_detection(args):
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>Audio Analysis Dashboard - {base_filename_for_dir}</title>
+    <title>Audio Analysis - {base_filename_for_dir}</title>
     <script type="text/javascript">{plotly_js}</script>
     <style>
         body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
@@ -840,31 +712,23 @@ def sound_event_detection(args):
     </div>
     <div id="plot"></div>
     <script type="text/javascript">
-        const dataPayload = {json_data};
-        const traces = dataPayload.traces.map((t, index) => ({{
-            x: dataPayload.times,
-            y: t.y,
-            name: t.name,
-            mode: 'lines',
-            visible: index < 10 ? true : 'legendonly',
-            line: {{ width: 2 }}
+        const data = {json_payload};
+        const traces = data.traces.map((t, index) => ({{
+            x: data.times, y: t.y, name: t.name, mode: 'lines',
+            visible: index < 10 ? true : 'legendonly', line: {{ width: 2 }}
         }}));
-        const layout = {{
+        Plotly.newPlot('plot', traces, {{
             title: 'Top 50 Sound Events Momentum',
             xaxis: {{ title: 'Seconds', gridcolor: '#eee' }},
             yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
-            hovermode: 'x unified',
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
+            hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             margin: {{ t: 50, b: 50, l: 60, r: 20 }}
-        }};
-        Plotly.newPlot('plot', traces, layout, {{ responsive: true }});
+        }}, {{ responsive: true }});
     </script>
 </body>
 </html>
 """
-    with open(html_dashboard_path, 'w', encoding='utf-8') as f:
-        f.write(html_content)
+    with open(html_dashboard_path, 'w', encoding='utf-8') as f: f.write(html_content)
     print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
 
     """
