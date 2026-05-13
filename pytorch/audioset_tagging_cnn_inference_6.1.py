@@ -69,9 +69,23 @@ import config
 
 
 
-def get_media_metadata(input_media_path):
+def is_video_file(audio_path):
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_streams', '-print_format', 'json', audio_path],
+            capture_output=True, text=True, check=True
+        )
+        streams = json.loads(result.stdout).get('streams', [])
+        return any(stream['codec_type'] == 'video' and stream.get('codec_name') not in ['mjpeg', 'png'] for stream in streams)
+    except subprocess.CalledProcessError:
+        return False
+    except Exception:
+        return False
+
+
+def get_duration_and_fps(input_media_path):
     """
-    Extract duration, FPS, resolution, and is_video flag from a media file using FFprobe.
+    Extract duration, FPS, and resolution from a media file using FFprobe.
     Handles audio-only and video files universally, prioritizing format duration.
     """
     try:
@@ -80,6 +94,7 @@ def get_media_metadata(input_media_path):
             ['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-print_format', 'json', input_media_path],
             capture_output=True, text=True
         )
+        # Check if ffprobe returned valid JSON output
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError as e:
@@ -89,8 +104,11 @@ def get_media_metadata(input_media_path):
         streams = data.get('streams', [])
         format_info = data.get('format', {})
         
-        duration, fps, width, height = None, None, None, None
-        is_video = any(s['codec_type'] == 'video' and s.get('codec_name') not in ['mjpeg', 'png'] for s in streams)
+        # Initialize outputs
+        duration = None
+        fps = None
+        width = None
+        height = None
 
         # Try format duration first (most reliable)
         if format_info.get('duration'):
@@ -125,7 +143,7 @@ def get_media_metadata(input_media_path):
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid nb_frames or fps for duration calculation in {input_media_path}\033[0m")
 
-        # Check audio stream fallback
+        # Check audio stream for duration (for audio-only files like WebM/Opus)
         if duration is None:
             audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
             if audio_stream and audio_stream.get('duration'):
@@ -133,8 +151,19 @@ def get_media_metadata(input_media_path):
                     duration = float(audio_stream['duration'])
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid audio stream duration in {input_media_path}\033[0m")
+            
+            # Check tags.DURATION for audio stream (e.g., WebM/Opus)
+            if duration is None and audio_stream and audio_stream.get('tags', {}).get('DURATION'):
+                try:
+                    # Parse tags.DURATION (format: "HH:MM:SS.mmmmmmmmm")
+                    duration_str = audio_stream['tags']['DURATION']
+                    h, m, s = duration_str.split(':')
+                    s, ms = s.split('.')
+                    duration = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000000000
+                except (ValueError, TypeError):
+                    print(f"\033[1;33mWarning: Invalid tags.DURATION in {input_media_path}\033[0m")
 
-        # Final Fallback: Direct duration probe
+        # Fallback: Direct ffprobe duration probe
         if duration is None:
             try:
                 result = subprocess.run(
@@ -148,9 +177,9 @@ def get_media_metadata(input_media_path):
         # If duration is still None, exit with error
         if duration is None:
             print(f"\033[1;31mError: Could not determine duration for {input_media_path}. Exiting.\033[0m")
-            return None, None, None, None, False
+            return None, None, None, None
 
-        # --- USER INTERFACE & LOGGING ---
+        # Log results
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
         print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
         if fps:
@@ -165,14 +194,17 @@ def get_media_metadata(input_media_path):
                 print(f"\033[1;32mffmpeg -i \"{input_media_path}\" -vf \"transpose=1\" \"{os.path.splitext(input_media_path)[0]}_rotated.mp4\"\033[0m\n")
                 print("To do so, break the script now (Ctrl+C) and run the command above.")
                 print("Otherwise, we are proceeding with the portrait video in 2 seconds...")
-                time.sleep(2)
+                time.sleep(2) # Add a 2-second delay
                 print("\033[1;33m------------------------------------------\033[0m\n")
 
-        return duration, fps, width, height, is_video
+        return duration, fps, width, height
 
+    except subprocess.CalledProcessError as e:
+        print(f"\033[1;31mError: FFprobe failed for {input_media_path}: {e}\033[0m")
+        return None, None, None, None
     except Exception as e:
-        print(f"\033[1;31mError: Metadata probe failed for {input_media_path}: {e}\033[0m")
-        return None, None, None, None, False
+        print(f"\033[1;31mError: Unexpected failure parsing {input_media_path}: {e}\033[0m")
+        return None, None, None, None
 
 def compute_kl_divergence(p, q, eps=1e-10):
     """Compute KL divergence between two probability distributions."""
@@ -268,12 +300,8 @@ def sound_event_detection(args):
     fmax = args.fmax
     model_type = args.model_type
     checkpoint_path = args.checkpoint_path
-    
-    # Path Consolidation: Clearly define the roles of each media path
-    source_media = args.audio_path    # The original file (never changed)
-    inference_media = source_media   # The file used for duration/audio loading (may be updated to recovered/sanitized)
-    overlay_media = source_media     # The file used for the final video overlay
-    
+    audio_path = args.audio_path
+    overlay_source_path = audio_path  # Preserve original for final video overlay
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
 
     print(f"Using device: {device}")
@@ -285,8 +313,8 @@ def sound_event_detection(args):
     classes_num = config.classes_num
     labels = config.labels
     
-    audio_dir = os.path.dirname(source_media)
-    base_filename_for_dir = get_filename(source_media)
+    audio_dir = os.path.dirname(audio_path)
+    base_filename_for_dir = get_filename(audio_path)
     checkpoint_name = os.path.basename(checkpoint_path)
     output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
@@ -310,11 +338,8 @@ def sound_event_detection(args):
 
     # --- PHASE 2: Idempotency Check ---
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
+    is_video = is_video_file(audio_path)
     
-    # Efficiently probe all metadata once
-    duration, video_fps, video_width, video_height, is_video = get_media_metadata(source_media)
-    if duration is None: return # Error already printed in probe
-
     # Define what files we strictly expect to see before skipping
     required_files = [csv_path]
     if args.static_eventogram:
@@ -326,7 +351,7 @@ def sound_event_detection(args):
         required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
             
     if all(os.path.exists(f) for f in required_files):
-        print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
+        print(f"✅ Skipping {audio_path}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         return
 
     # Check for sufficient disk space
@@ -348,16 +373,18 @@ def sound_event_detection(args):
         print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
         return
 
-    # --- PHASE 4: Media Integrity & Recovery ---
-    # Recovery: Attempt conversion to MP3 if duration detection returned 0
-    if duration == 0:
-        print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting MP3 recovery...\033[0m")
+    # --- PHASE 4: Media Integrity & Metadata Extraction ---
+    duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
+    
+    # Recovery: Attempt conversion to MP3 if duration detection fails
+    if duration is None or duration == 0:
+        print(f"\033[1;33mWarning: Duration probe failed for {audio_path}. Attempting MP3 recovery...\033[0m")
         mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_for_dir}_recovered.mp3")
 
         try:
-            subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
-            inference_media = mp3_path # Rest of the script uses this recovered file
-            duration, video_fps, video_width, video_height, is_video = get_media_metadata(inference_media)
+            subprocess.run(['ffmpeg', '-i', audio_path, '-y', mp3_path], check=True, capture_output=True)
+            audio_path = mp3_path # Rest of the script uses this recovered file
+            duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
@@ -371,10 +398,11 @@ def sound_event_detection(args):
         print(f"\033[1;33mWarning: Video dimensions not detected, using default 1280x720.\033[0m")
     
     # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
+    video_input_path = audio_path # Variable for the file we actually feed to torchaudio
     temp_video_path = None
     if is_video:
         result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate,avg_frame_rate', '-of', 'json', inference_media],
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate,avg_frame_rate', '-of', 'json', audio_path],
             capture_output=True, text=True, check=True
         )
         data = json.loads(result.stdout)
@@ -390,24 +418,24 @@ def sound_event_detection(args):
                 temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
                 target_fps = video_fps if video_fps and video_fps > 0 else output_fps
                 subprocess.run([
-                    'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
+                    'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
                 ], check=True)
-                inference_media = temp_video_path
+                video_input_path = temp_video_path
 
     # --- PHASE 6: Waveform Loading (Sanitary Gate) ---
     try:
-        waveform, sr = torchaudio.load(inference_media)
+        waveform, sr = torchaudio.load(video_input_path)
     except Exception as e:
         print(f"\033[1;33mWarning: Direct torchaudio load failed. Attempting PCM sanitization...\033[0m")
         sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_filename_for_dir}.wav')
         try:
-            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', inference_media, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
+            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
             try:
                 waveform, sr = torchaudio.load(sanitized_temp_path)
             except:
                 waveform_np, sr = sf.read(sanitized_temp_path)
                 waveform = torch.from_numpy(waveform_np).float().T if waveform_np.ndim > 1 else torch.from_numpy(waveform_np).float().unsqueeze(0)
-            inference_media = sanitized_temp_path
+            video_input_path = sanitized_temp_path
         except Exception as generic_err:
             print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
             return
@@ -433,11 +461,11 @@ def sound_event_detection(args):
     
     framewise_vis_list = []
     stft_vis_list = []
-    
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Resolution: Disk {frames_per_second} FPS | Visualization {vis_fps} FPS")
-
+    
+    
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['time'] + list(labels))
@@ -478,6 +506,7 @@ def sound_event_detection(args):
             ).abs().cpu().numpy()
             stft_vis_list.append(chunk_stft[:, ::vis_downsample])
             
+            
             avail_ram = psutil.virtual_memory().available / (1024 * 1024)
             print(f"Chunk at {int(chunk_start_time/60)}m finished. (RAM Avail: {avail_ram:.0f} MB)")
 
@@ -495,6 +524,7 @@ def sound_event_detection(args):
     
     print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
+
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
@@ -838,8 +868,8 @@ def sound_event_detection(args):
             print("🎬  Overlaying the source media with the created eventogram…")
             final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
             
-            # Use pre-probed dimensions (no redundant FFprobe call)
-            b_w, b_h = video_width, video_height
+            # Re-probe original dimensions to ensure pixel-perfect scaling
+            _, _, b_w, b_h = get_duration_and_fps(overlay_source_path)
             
             # Scaling logic: Match the width of the overlay to the source (or vice versa)
             t_w, t_h = (b_w, b_h) if b_w >= fig_width_px else (fig_width_px, int(b_h * fig_width_px / b_w))
