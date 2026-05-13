@@ -1047,22 +1047,13 @@ def sound_event_detection(args):
 if __name__ == '__main__':
 
 
+
+    
+
     parser = argparse.ArgumentParser(
         description='Audio tagging and Sound event detection.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog="""
-Note on the models:
-* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): 
-  Designed for SED. Maintains time dimension through the classifier. 
-  Outputs framewise_output for 'Eventograms' and CSV logs.
-* Other models (e.g., Cnn14, Wavegram_Logmel_Cnn14) are optimized for audio tagging.
-  Use the '--mode audio_tagging' switch for these.
-
-Technical Notes:
-* Processing time ratio: ~15s of audio takes ~1s to process on a 300 GFLOPs, 4-core CPU.
-* RAM Optimization: Internal structures are max-pooled to 2 FPS.
-* Video rendering is data-synchronous and cached for speed.
-"""
+        epilog=""" """
     )
     parser.add_argument('audio_path', type=str, help='Path to the media file')
     parser.add_argument('--mode', choices=['audio_tagging', 'sound_event_detection'],
@@ -1100,41 +1091,41 @@ Technical Notes:
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
                         help='Max seconds to look ahead/back for acoustic boundaries in adaptive mode')
+
+    # Heuristic to find audio_path for the help/info block
+    audio_path_hint = "[audio_path]"
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            if not arg.startswith('-'):
+                audio_path_hint = arg
+                break                        
                         
-
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(1)
-
-    args = parser.parse_args()
-    
-    audio_path = args.audio_path  # <-- extract it
-
-    print(f"Eventogrammer, version 6.8.6. Material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. ")
-    
-    # --- ECHO INFO SECTION: ANDROID PLATFORM HACK ---
-
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Notes: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU.") 
-    print(f"If the file is too long, use e.g. this to split:") 
-    print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path} -c copy -f segment -segment_time 1200 output_%03d.mp4")
-    
+    print(f"Eventogrammer, version 6.8.7") 
 
- 
-    print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")
+    print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")    
+    print(f"    Recent material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. ")
+    print()
+
     print(f"Note on the models:")   
     print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
     print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
     print()
-    print(f"Note on speed: works 1.7 times faster in Prooted Debian than in Termux, see the comments why so.")  
+    print(f"Note on the processing speed: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU, without video visualizations.") 
+    
+    print(f"It works 1.7 times faster in Prooted Debian than in Termux, see the comments why so.")  
+            
     print(f"Note on the out of memory crashes: close all other programs in Droid, especially the browser. Or just restart whole phone. Or do it in Recovery.")  
-    # In Termux your PyTorch build is explicitly: USE_EIGEN_FOR_BLAS=ON. It means: PyTorch tensor ops that would normally dispatch to BLAS/LAPACK are not using an external high-performance BLAS backend at all. They are using Eigen’s generic CPU kernels compiled into PyTorch. That decision is compile-time, not runtime. In practice: same workload, same model family, same CPU class, different environments, and we observed a consistent ~1.7× gap in wall time (Termux ~14 min vs Debian ~8 min).
-    
-    
     
 
-    print("Tips: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
+
+    print(f"If the file is too long, use e.g. this to split:") 
+    print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+
+    # In Termux your PyTorch build is explicitly: USE_EIGEN_FOR_BLAS=ON. It means: PyTorch tensor ops that would normally dispatch to BLAS/LAPACK are not using an external high-performance BLAS backend at all. They are using Eigen’s generic CPU kernels compiled into PyTorch. That decision is compile-time, not runtime. In practice: same workload, same model family, same CPU class, different environments, and we observed a consistent ~1.7× gap in wall time (Termux ~14 min vs Debian ~8 min).
+    
+    print("Tips on bugs: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
     print("This is often a version mismatch between torch and torchaudio, simply run:")
     print("pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
     print("pip install -U torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
@@ -1144,19 +1135,22 @@ Technical Notes:
     print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
     
-
+    print(f"")    
     
-
     print(f"Using moviepy version: {moviepy.__version__}")
     print(f"Using torchaudio version: {torchaudio.__version__}")
     # May need to be disabled as it errors if installed some weird version 0 dev. 
     print(f"Using torchcodec version: {torchcodec.__version__}") 
 
-
-    
-    
-
     print(f"")
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args()
+    audio_path = args.audio_path
+
 
     if args.mode == 'audio_tagging':
         audio_tagging(args)
