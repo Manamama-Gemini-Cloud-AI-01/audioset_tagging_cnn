@@ -828,7 +828,7 @@ def sound_event_detection(args):
         final_clip.write_videofile(
             output_video_path, codec="libx264", fps=output_fps, 
             threads=os.cpu_count(),
-            temp_audiofile=os.path.join(tempfile.gettempdir(), f"{base_name}{tag_suffix}_temp_audio.mp3")
+            temp_audiofile=os.path.join(output_dir, "temp_render_audio.mp3")
         )
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
