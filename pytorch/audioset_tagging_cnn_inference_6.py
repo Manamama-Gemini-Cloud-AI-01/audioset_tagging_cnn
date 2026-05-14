@@ -932,47 +932,49 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.8") 
+    print(f"Eventogrammer, version 6.8.9") 
+    print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print()
 
-    print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")    
-    print(f"    Recent material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. Gemini AI rationalized code in many places.")
+    print(f"Recent Material Changes:")
+    print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
+    print(f"* Speed Hack: Persistent Matplotlib figures with Artist Updates.")
+    print(f"* Visual Fix: Proper window centering for scrolling eventograms.")
+    print(f"* Refactor: Gemini AI rationalized path management and code structure.")
     print()
 
     print(f"Note on the models:")   
-    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
-    print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
+    print(f"* Cnn14_DecisionLevelMax (Sound Event Detection): Uses Decision-level pooling to maintain")
+    print(f"  time resolution. Essential for generating Eventograms and high-res CSV logs.")
+    print(f"* Other models: Best for global audio tagging (use the '--audio_tagging' mode).")
     print()
-    print(f"Note on the processing speed: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU, without video visualizations.") 
-    
-    print(f"It works 1.7 times faster in Prooted Debian than in Termux, see the comments why so.")  
-            
-    print(f"Note on the out of memory crashes: close all other programs in Droid, especially the browser. Or just restart whole phone. Or do it in Recovery.")  
-    
 
+    print(f"Performance & Stability:") 
+    print(f"* Processing ratio: ~15s audio per 1s CPU time (300 GFLOPs, 4-core, no viz).") 
+    print(f"* Platform Gap: works ~1.7x faster in Prooted Debian than in Termux (Eigen BLAS).")  
+    print(f"* OOM Safety: Close browsers or restart whole phone if crashes occur in Termux.")  
+    print()
 
-    print(f"If the file is too long, use e.g. this to split:") 
-    print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print(f"Split Suggestion:") 
+    print(f"If the file is too long, use FFmpeg to segment it first:") 
+    print(f"mkdir split_input_media && cd split_input_media && \\")
+    print(f"ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print()
 
-    # In Termux your PyTorch build is explicitly: USE_EIGEN_FOR_BLAS=ON. It means: PyTorch tensor ops that would normally dispatch to BLAS/LAPACK are not using an external high-performance BLAS backend at all. They are using Eigen’s generic CPU kernels compiled into PyTorch. That decision is compile-time, not runtime. In practice: same workload, same model family, same CPU class, different environments, and we observed a consistent ~1.7× gap in wall time (Termux ~14 min vs Debian ~8 min).
-    
-    print("Tips on bugs: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
-    print("This is often a version mismatch between torch and torchaudio, simply run:")
-    print("pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
-    print("pip install -U torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
-    print("In e.g. Prooted Debian under Termux, torchcodec has dependencies on NVIDA .so files and the script errors, so you may need to git clone and pip install it from scratch (which works without a hitch) then.")
+    print("Tips & Environment Hacks:")
+    print("* For 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
+    print("  Run: pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
+    print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
+    print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
+    print()
 
-    print(f"If you see 'NotImplementedError: sys.platform = android' after an update:")
-    print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
-    print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
-    
-    print(f"")    
-    
-    print(f"Using moviepy version: {moviepy.__version__}")
-    print(f"Using torchaudio version: {torchaudio.__version__}")
+    print(f"Dependency Versions:")
+    print(f"MoviePy: {moviepy.__version__}")
+    print(f"Torchaudio: {torchaudio.__version__}")
     # May need to be disabled as it errors if installed some weird version 0 dev. 
-    print(f"Using torchcodec version: {torchcodec.__version__}") 
-
-    print(f"")
+    print(f"Torchcodec: {torchcodec.__version__}") 
+    print()
 
     if len(sys.argv) == 1:
         parser.print_help()
