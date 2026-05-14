@@ -437,7 +437,7 @@ def sound_event_detection(args):
     
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
-    print(f"    Resolution: Disk {inference_fps} FPS | Visualization {viz_fps} FPS")
+    print(f"    Resolution: Disk {inference_fps} Hz (Data Frames) | Visualization {viz_fps} Hz (UI/RAM)")
 
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -491,7 +491,7 @@ def sound_event_detection(args):
     frames_num = len(framewise_output)
     duration = frames_num / viz_fps
     
-    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{viz_fps} FPS\033[1;0m')
+    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{viz_fps} Hz (Data Frames)\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
@@ -807,7 +807,7 @@ def sound_event_detection(args):
                 return img
 
         # --- SMART CACHE LAYER ---
-        # Since video FPS (30) >> data FPS (5), we reuse the last rendered frame
+        # Since video FPS (30) >> data Hz (5), we reuse the last rendered frame
         # for 6 consecutive video frames to save ~80% of CPU rendering time.
         frame_cache = {"last_i": -1, "last_img": None}
 
@@ -908,11 +908,11 @@ if __name__ == '__main__':
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
     parser.add_argument('--csv_fps', type=int, default=5,
-                        help='FPS to write to full_event_log.csv. '
+                        help='Data frames per second (Hz) to write to full_event_log.csv. '
                              'Use 100 for full resolution (very large file). '
                              '5 is enough for Shapash + outlier detection.')
     parser.add_argument('--vis_fps', type=int, default=5,
-                        help='FPS for internal RAM-based visualization data (RAM guard)')
+                        help='Data frames per second (Hz) for internal RAM-based visualization data (RAM guard)')
     parser.add_argument('--output_fps', type=int, default=30,
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
