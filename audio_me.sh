@@ -50,7 +50,12 @@ echo "Note: if no torchaudio backends, do find a patch file, usually called spee
 
 cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
+
+
+echo "We are checking the real path of the first argument, which may hang if the file be not accessible..."
 INPUT_FILE=$(realpath "$1")
+
+
 
 if [[ ! -f "$INPUT_FILE" ]]; then
 #We give up
@@ -59,8 +64,11 @@ if [[ ! -f "$INPUT_FILE" ]]; then
 fi
 
 
+echo 
+
 
 # Run inference
+
 $PREFIX/bin/time -v python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \

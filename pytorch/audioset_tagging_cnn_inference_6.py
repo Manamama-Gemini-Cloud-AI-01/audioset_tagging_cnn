@@ -73,6 +73,7 @@ def get_media_metadata(input_media_path):
     """
     Extract duration, FPS, resolution, and is_video flag from a media file using FFprobe.
     Handles audio-only and video files universally, prioritizing format duration.
+    Returns: (duration, avg_fps, width, height, is_video, r_fps)
     """
     try:
         # Run ffprobe to get format and stream info
@@ -89,7 +90,7 @@ def get_media_metadata(input_media_path):
         streams = data.get('streams', [])
         format_info = data.get('format', {})
         
-        duration, fps, width, height = None, None, None, None
+        duration, avg_fps, width, height, r_fps = None, None, None, None, None
         is_video = any(s['codec_type'] == 'video' and s.get('codec_name') not in ['mjpeg', 'png'] for s in streams)
 
         # Try format duration first (most reliable)
@@ -108,20 +109,28 @@ def get_media_metadata(input_media_path):
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid video stream duration in {input_media_path}\033[0m")
             
-            avg_frame_rate = video_stream.get('avg_frame_rate')
-            if avg_frame_rate and '/' in avg_frame_rate:
+            # Average FPS
+            avg_fr = video_stream.get('avg_frame_rate')
+            if avg_fr and '/' in avg_fr:
                 try:
-                    num, den = map(int, avg_frame_rate.split('/'))
-                    fps = num / den if den else None
-                except (ValueError, TypeError):
-                    print(f"\033[1;33mWarning: Invalid avg_frame_rate in {input_media_path}\033[0m")
+                    num, den = map(int, avg_fr.split('/'))
+                    avg_fps = num / den if den else None
+                except (ValueError, TypeError): pass
+            
+            # Real FPS (for VFR check)
+            r_fr = video_stream.get('r_frame_rate')
+            if r_fr and '/' in r_fr:
+                try:
+                    num, den = map(int, r_fr.split('/'))
+                    r_fps = num / den if den else None
+                except (ValueError, TypeError): pass
             
             width = int(video_stream.get('width', 0)) if video_stream.get('width') else None
             height = int(video_stream.get('height', 0)) if video_stream.get('height') else None
             
-            if duration is None and video_stream.get('nb_frames') and fps:
+            if duration is None and video_stream.get('nb_frames') and avg_fps:
                 try:
-                    duration = int(video_stream['nb_frames']) / fps
+                    duration = int(video_stream['nb_frames']) / avg_fps
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid nb_frames or fps for duration calculation in {input_media_path}\033[0m")
 
@@ -148,13 +157,13 @@ def get_media_metadata(input_media_path):
         # If duration is still None, exit with error
         if duration is None:
             print(f"\033[1;31mError: Could not determine duration for {input_media_path}. Exiting.\033[0m")
-            return None, None, None, None, False
+            return None, None, None, None, False, None
 
         # --- USER INTERFACE & LOGGING ---
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
         print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
-        if fps:
-            print(f"🮲  🗃️  Video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
+        if avg_fps:
+            print(f"🮲  🗃️  Video FPS (avg): \033[1;34m{avg_fps:.3f}\033[0m")
         if width and height:
             print(f"📽  🗃️  Video resolution: \033[1;34m{width}x{height}\033[0m")
             if height > width:
@@ -168,11 +177,11 @@ def get_media_metadata(input_media_path):
                 time.sleep(2)
                 print("\033[1;33m------------------------------------------\033[0m\n")
 
-        return duration, fps, width, height, is_video
+        return duration, avg_fps, width, height, is_video, r_fps
 
     except Exception as e:
         print(f"\033[1;31mError: Metadata probe failed for {input_media_path}: {e}\033[0m")
-        return None, None, None, None, False
+        return None, None, None, None, False, None
 
 def compute_kl_divergence(p, q, eps=1e-10):
     """Compute KL divergence between two probability distributions."""
@@ -257,12 +266,17 @@ def audio_tagging(args):
 def sound_event_detection(args):
     # --- PHASE 0: Setup & Environment ---
     output_fps = args.output_fps
-    vis_fps = args.vis_fps
+    viz_fps = args.vis_fps  # Fixed constant for internal resolution
     adaptive_lookahead = args.adaptive_lookahead
     
     sample_rate = args.sample_rate
     window_size = args.window_size
     hop_size = args.hop_size
+    inference_fps = sample_rate // hop_size # Typically 100
+    
+    top_k = 10  # Number of top events to track/visualize
+    fig_width_px, fig_height_px, dpi = 1280, 480, 100
+    
     mel_bins = args.mel_bins
     fmin = args.fmin
     fmax = args.fmax
@@ -312,7 +326,7 @@ def sound_event_detection(args):
     csv_path = os.path.join(output_dir, 'full_event_log.csv')
     
     # Efficiently probe all metadata once
-    duration, video_fps, video_width, video_height, is_video = get_media_metadata(source_media)
+    duration, video_fps, video_width, video_height, is_video, r_fps = get_media_metadata(source_media)
     if duration is None: return # Error already printed in probe
 
     # Define what files we strictly expect to see before skipping
@@ -357,7 +371,7 @@ def sound_event_detection(args):
         try:
             subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
             inference_media = mp3_path # Rest of the script uses this recovered file
-            duration, video_fps, video_width, video_height, is_video = get_media_metadata(inference_media)
+            duration, video_fps, video_width, video_height, is_video, r_fps = get_media_metadata(inference_media)
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
@@ -372,27 +386,15 @@ def sound_event_detection(args):
     
     # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
     temp_video_path = None
-    if is_video:
-        result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate,avg_frame_rate', '-of', 'json', inference_media],
-            capture_output=True, text=True, check=True
-        )
-        data = json.loads(result.stdout)
-        if data.get('streams'):
-            stream = data['streams'][0]
-            r_num, r_den = map(int, stream.get('r_frame_rate', '0/1').split('/'))
-            avg_num, avg_den = map(int, stream.get('avg_frame_rate', '0/1').split('/'))
-            r_fps = r_num / r_den if r_den else 0
-            avg_fps = avg_num / avg_den if avg_den else 0
-            
-            if abs(r_fps - avg_fps) > 0.01:
-                print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{avg_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
-                temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
-                target_fps = video_fps if video_fps and video_fps > 0 else output_fps
-                subprocess.run([
-                    'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
-                ], check=True)
-                inference_media = temp_video_path
+    if is_video and r_fps and video_fps:
+        if abs(r_fps - video_fps) > 0.01:
+            print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
+            temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
+            target_fps = video_fps if video_fps > 0 else output_fps
+            subprocess.run([
+                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
+            ], check=True)
+            inference_media = temp_video_path
 
     # --- PHASE 6: Waveform Loading (Sanitary Gate) ---
     try:
@@ -428,15 +430,14 @@ def sound_event_detection(args):
     # --- PHASE 7: Chunked Model Inference (Memory-Safe) ---
     chunk_duration = 180  # 3 minutes
     chunk_samples = int(chunk_duration * sample_rate)
-    frames_per_second = sample_rate // hop_size
-    vis_downsample = frames_per_second // vis_fps
+    vis_downsample = inference_fps // viz_fps
     
     framewise_vis_list = []
     stft_vis_list = []
     
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
-    print(f"    Resolution: Disk {frames_per_second} FPS | Visualization {vis_fps} FPS")
+    print(f"    Resolution: Disk {inference_fps} FPS | Visualization {viz_fps} FPS")
 
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
@@ -458,9 +459,9 @@ def sound_event_detection(args):
             
             # Step B: Write high-res results to disk immediately (Lean memory)
             chunk_start_time = start / sample_rate
-            csv_downsample = max(1, frames_per_second // args.csv_fps)
+            csv_downsample = max(1, inference_fps // args.csv_fps)
             for i in range(0, len(chunk_out), csv_downsample):
-                timestamp = chunk_start_time + (i / frames_per_second)
+                timestamp = chunk_start_time + (i / inference_fps)
                 writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
             
             # Step C: Downsample for RAM-based visualization (Max-pooling preserves short events)
@@ -486,23 +487,18 @@ def sound_event_detection(args):
     stft = np.concatenate(stft_vis_list, axis=1)
     del framewise_vis_list, stft_vis_list
     
-    # Update frame metadata for downsampled resolution
-    frames_per_second = vis_fps 
-    frames_num = len(framewise_output)
-    
     # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
-    duration = frames_num / frames_per_second
+    frames_num = len(framewise_output)
+    duration = frames_num / viz_fps
     
-    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
+    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{viz_fps} FPS\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
-    top_k = 10
     top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
     top_labels = np.array(labels)[sorted_indexes[0:top_k]]
 
-    fig_width_px, fig_height_px, dpi = 1280, 480, 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
     
     # Pass 1: Create dummy plot to measure Y-axis label pixel width (Dynamic Margin)
@@ -524,9 +520,9 @@ def sound_event_detection(args):
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
+    x_ticks = np.arange(0, frames_num, viz_fps * tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels([int(t / frames_per_second) for t in x_ticks], rotation=45, ha='right', fontsize=10)
+    axs[1].xaxis.set_ticklabels([int(t / viz_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num); axs[1].set_yticks(np.arange(0, top_k)); axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
     axs[1].set_xlabel('Seconds', fontsize=14); axs[1].xaxis.set_ticks_position('bottom')
@@ -559,14 +555,14 @@ def sound_event_detection(args):
             elif in_event and prob < offset_threshold:
                 in_event = False
                 duration_frames = frame_index - event_start_frame
-                duration_secs = duration_frames / frames_per_second
+                duration_secs = duration_frames / viz_fps
                 
                 if duration_secs >= min_event_duration_seconds:
                     event_block_probs = framewise_output[event_start_frame:frame_index, label_idx]
                     events_by_class[label].append({
                         'sound_class': label,
-                        'start_time_seconds': round(event_start_frame / frames_per_second, 3),
-                        'end_time_seconds': round(frame_index / frames_per_second, 3),
+                        'start_time_seconds': round(event_start_frame / viz_fps, 3),
+                        'end_time_seconds': round(frame_index / viz_fps, 3),
                         'duration_seconds': round(duration_secs, 3),
                         'peak_probability': float(np.max(event_block_probs)),
                         'average_probability': float(np.mean(event_block_probs))
@@ -616,7 +612,7 @@ def sound_event_detection(args):
             if prob > ai_threshold:
                 if current_event is None:
                     current_event = {
-                        "start": round(frame_index / frames_per_second, 3),
+                        "start": round(frame_index / viz_fps, 3),
                         "peak": float(prob), "trace": [float(prob)]
                     }
                 else:
@@ -630,7 +626,7 @@ def sound_event_detection(args):
                 
                 events_derivative[label].append({
                     "start_time": current_event["start"],
-                    "end_time": round(frame_index / frames_per_second, 3),
+                    "end_time": round(frame_index / viz_fps, 3),
                     "peak_prob": current_event["peak"],
                     "delta_trace": zip_trace(deltas)
                 })
@@ -642,7 +638,7 @@ def sound_event_detection(args):
             for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
             events_derivative[label].append({
                 "start_time": current_event["start"],
-                "end_time": round(len(probs_stream) / frames_per_second, 3),
+                "end_time": round(len(probs_stream) / viz_fps, 3),
                 "peak_prob": current_event["peak"],
                 "delta_trace": zip_trace(deltas)
             })
@@ -659,7 +655,7 @@ def sound_event_detection(args):
     popularity = np.sum(framewise_output, axis=0)
     top_50_indices = np.argsort(popularity)[::-1][:50]
     
-    times = [round(i / frames_per_second, 2) for i in range(frames_num)]
+    times = [round(i / viz_fps, 2) for i in range(frames_num)]
     traces_data = []
     for idx in top_50_indices:
         traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
@@ -725,7 +721,7 @@ def sound_event_detection(args):
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
         if args.dynamic_eventogram:
             output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
-            window_frames = int(args.window_duration * frames_per_second)
+            window_frames = int(args.window_duration * viz_fps)
             half_window = window_frames // 2 
 
             # PRECOMPUTE: Map every data point to its local acoustic window (once per run)
@@ -737,8 +733,8 @@ def sound_event_detection(args):
                 # Adaptive logic: Try to center the window on acoustic "peaks" rather than strict time
                 if args.use_adaptive_window:
                     kl_threshold = 0.5
-                    lookahead_f = int(adaptive_lookahead * frames_per_second)
-                    for offset in range(half_window, half_window + lookahead_f, int(frames_per_second)):
+                    lookahead_f = int(adaptive_lookahead * viz_fps)
+                    for offset in range(half_window, half_window + lookahead_f, int(viz_fps)):
                         if start_f - offset >= 0:
                             prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
                             curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
@@ -778,7 +774,7 @@ def sound_event_detection(args):
                 """High-speed redraw using set_data instead of creating new plots."""
                 data = precomputed_data[i]
                 s_f, e_f = data['start'], data['end']
-                t_start, t_end, t_curr = s_f / frames_per_second, e_f / frames_per_second, i / frames_per_second
+                t_start, t_end, t_curr = s_f / viz_fps, e_f / viz_fps, i / viz_fps
                 
                 im_spec.set_data(stft_log[:, s_f:e_f]); im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
                 im_event.set_data(data['out'].T); im_event.set_extent([t_start, t_end, 0, top_k])
@@ -816,7 +812,7 @@ def sound_event_detection(args):
         frame_cache = {"last_i": -1, "last_img": None}
 
         def make_frame(t):
-            i = min(int(t * frames_per_second), frames_num - 1)
+            i = min(int(t * viz_fps), frames_num - 1)
             if i == frame_cache["last_i"]: return frame_cache["last_img"]
             
             img = draw_strategy(i)
@@ -825,7 +821,7 @@ def sound_event_detection(args):
 
         # Final Compositing & Export
         eventogram_clip = VideoClip(make_frame, duration=duration)
-        audio_clip = AudioFileClip(video_input_path)
+        audio_clip = AudioFileClip(inference_media)
         final_clip = eventogram_clip.with_audio(audio_clip)
         final_clip.fps = output_fps
         
@@ -846,7 +842,7 @@ def sound_event_detection(args):
             if t_h % 2: t_h += 1 # FFmpeg requires even dimensions for H.264
             
             overlay_cmd = [
-                "ffmpeg", "-y", "-i", overlay_source_path, "-i", output_video_path, "-loglevel", "warning",
+                "ffmpeg", "-y", "-i", overlay_media, "-i", output_video_path, "-loglevel", "warning",
                 "-filter_complex", (
                     f"[0:v]scale={t_w}:{t_h}[main];" # Scale source video
                     f"[1:v]scale={t_w}:{int(t_h * args.overlay_size)}[ovr];" # Scale eventogram
