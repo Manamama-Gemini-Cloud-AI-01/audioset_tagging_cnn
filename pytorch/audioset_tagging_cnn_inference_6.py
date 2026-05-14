@@ -300,9 +300,9 @@ def sound_event_detection(args):
     labels = config.labels
     
     audio_dir = os.path.dirname(source_media)
-    base_filename_for_dir = get_filename(source_media)
+    base_name = get_filename(source_media)
     checkpoint_name = os.path.basename(checkpoint_path)
-    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_name}_audioset_tagging_cnn')
+    output_dir = os.path.join(audio_dir, f'{base_name}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
 
     # --- PHASE 1: Dependency Injection (AI Guide) ---
@@ -319,7 +319,7 @@ def sound_event_detection(args):
     except Exception as e:
         print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
-    base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
+    tag_suffix = "_audioset_tagging_cnn"
     fig_path = os.path.join(output_dir, 'eventogram.png')
 
     # --- PHASE 2: Idempotency Check ---
@@ -332,11 +332,11 @@ def sound_event_detection(args):
     # Define what files we strictly expect to see before skipping
     required_files = [csv_path]
     if args.static_eventogram:
-        vid_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+        vid_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_static.mp4')
         required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
             
     if args.dynamic_eventogram:
-        vid_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
+        vid_path = os.path.join(output_dir, f"{base_name}{tag_suffix}_eventogram_dynamic.mp4")
         required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
             
     if all(os.path.exists(f) for f in required_files):
@@ -366,7 +366,7 @@ def sound_event_detection(args):
     # Recovery: Attempt conversion to MP3 if duration detection returned 0
     if duration == 0:
         print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting MP3 recovery...\033[0m")
-        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_for_dir}_recovered.mp3")
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_name}_recovered.mp3")
 
         try:
             subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
@@ -389,7 +389,7 @@ def sound_event_detection(args):
     if is_video and r_fps and video_fps:
         if abs(r_fps - video_fps) > 0.01:
             print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
-            temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
+            temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4')
             target_fps = video_fps if video_fps > 0 else output_fps
             subprocess.run([
                 'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
@@ -401,7 +401,7 @@ def sound_event_detection(args):
         waveform, sr = torchaudio.load(inference_media)
     except Exception as e:
         print(f"\033[1;33mWarning: Direct torchaudio load failed. Attempting PCM sanitization...\033[0m")
-        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_filename_for_dir}.wav')
+        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_name}.wav')
         try:
             subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', inference_media, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
             try:
@@ -668,7 +668,7 @@ def sound_event_detection(args):
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>Audio Analysis - {base_filename_for_dir}</title>
+    <title>Audio Analysis - {base_name}</title>
     <script type="text/javascript">{plotly_js}</script>
     <style>
         body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
@@ -679,7 +679,7 @@ def sound_event_detection(args):
 </head>
 <body>
     <div class="header">
-        <h1>Sound Event Analysis: {base_filename_for_dir}</h1>
+        <h1>Sound Event Analysis: {base_name}</h1>
         <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.csv</code></p>
     </div>
     <div id="plot"></div>
@@ -828,7 +828,7 @@ def sound_event_detection(args):
         final_clip.write_videofile(
             output_video_path, codec="libx264", fps=output_fps, 
             threads=os.cpu_count(),
-            temp_audiofile=os.path.join(tempfile.gettempdir(), f"{base_filename}_temp_audio.mp3")
+            temp_audiofile=os.path.join(tempfile.gettempdir(), f"{base_name}{tag_suffix}_temp_audio.mp3")
         )
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
@@ -841,9 +841,9 @@ def sound_event_detection(args):
             # Use pre-probed dimensions (no redundant FFprobe call)
             b_w, b_h = video_width, video_height
             
-            # Scaling logic: Match the width of the overlay to the source (or vice versa)
-            t_w, t_h = (b_w, b_h) if b_w >= fig_width_px else (fig_width_px, int(b_h * fig_width_px / b_w))
-            if t_h % 2: t_h += 1 # FFmpeg requires even dimensions for H.264
+            # Leaner Scaling: Match eventogram width (1280px) if source is smaller; force even height
+            t_w = max(b_w, fig_width_px)
+            t_h = int(b_h * t_w / b_w) // 2 * 2 
             
             overlay_cmd = [
                 "ffmpeg", "-y", "-i", overlay_media, "-i", output_video_path, "-loglevel", "warning",
