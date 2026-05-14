@@ -720,7 +720,7 @@ def sound_event_detection(args):
         
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
         if args.dynamic_eventogram:
-            output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
+            output_video_path = os.path.join(output_dir, f"{base_name}{tag_suffix}_eventogram_dynamic.mp4")
             window_frames = int(args.window_duration * viz_fps)
             half_window = window_frames // 2 
 
@@ -793,7 +793,7 @@ def sound_event_detection(args):
                 return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
 
         else: # Static Eventogram (Just a moving red line over the PNG)
-            output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+            output_video_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_static.mp4')
             base_img = plt.imread(fig_path)
             if base_img.dtype == np.float32: base_img = (base_img * 255).astype(np.uint8)
             base_img = base_img[:, :, :3]
