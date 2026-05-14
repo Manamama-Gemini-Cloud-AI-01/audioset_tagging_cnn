@@ -43,16 +43,14 @@ import subprocess
 import shutil
 import moviepy
 import warnings
-import platform
 import soundfile as sf
 import psutil
 #import coverage 
 
-from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
+from moviepy import AudioFileClip, VideoClip
 import json
 import collections
 import plotly.offline as pyo
-from scipy.stats import entropy
 import tempfile # Import tempfile for temporary file handling
 
 # Suppress torchaudio deprecation warnings
@@ -400,7 +398,7 @@ def sound_event_detection(args):
     try:
         waveform, sr = torchaudio.load(inference_media)
     except Exception as e:
-        print(f"\033[1;33mWarning: Direct torchaudio load failed. Attempting PCM sanitization...\033[0m")
+        print(f"\033[1;33mWarning: Direct torchaudio load failed ({e}). Attempting PCM sanitization...\033[0m")
         sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_name}.wav')
         try:
             subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', inference_media, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
