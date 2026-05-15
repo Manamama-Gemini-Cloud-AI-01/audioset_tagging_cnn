@@ -389,8 +389,16 @@ def sound_event_detection(args):
             print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
             temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4')
             target_fps = video_fps if video_fps > 0 else output_fps
+            # --- FFmpeg Compatibility Note ---
+            # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
+            # Rationale: '-fps_mode' was introduced in FFmpeg 5.1 (late 2022). 
+            # Many stable systems (like Ubuntu 20.04) still use FFmpeg 4.x, which only 
+            # recognizes '-vsync'. While '-vsync' is deprecated in FFmpeg 5.1+, it 
+            # remains a functional alias in FFmpeg 6.x/7.x. 
+            # If a future FFmpeg version (e.g., v10+) removes '-vsync', switch this back 
+            # to: '-fps_mode', 'cfr'
             subprocess.run([
-                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-fps_mode', 'cfr', '-c:a', 'aac', temp_video_path, '-y'
+                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-vsync', '1', '-c:a', 'aac', temp_video_path, '-y'
             ], check=True)
             inference_media = temp_video_path
 
