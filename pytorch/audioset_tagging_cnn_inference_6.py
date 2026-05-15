@@ -28,8 +28,19 @@ import matplotlib.pyplot as plt
 #Torch and torchaudio and coverage are version sensitive. Careful with: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
 
 import torch
-import torchaudio
-import torchcodec
+# Handle version-sensitive imports: Torchaudio is essential for tensor-land processing and CUDA efficiency.
+try:
+    import torchaudio
+except (OSError, ImportError) as e:
+    print(f"\033[1;31mERROR: torchaudio and torch are not compatible ({e}). We stop.\033[0m")
+    print("Please synchronize your versions to fix the 'undefined symbol' or import error:")
+    print("\033[1;32mpip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu\033[0m")
+    sys.exit(1)
+
+try:
+    import torchcodec
+except (OSError, ImportError, RuntimeError):
+    torchcodec = None
 # AI ARCHITECTURAL NOTE: torchaudio is essential for:
 # 1. High-level Decoding/Normalization/Resampling to 32kHz (fixed model rate).
 # 2. GPU/CUDA efficiency on large files.
@@ -402,23 +413,8 @@ def sound_event_detection(args):
             ], check=True)
             inference_media = temp_video_path
 
-    # --- PHASE 6: Waveform Loading (Sanitary Gate) ---
-    try:
-        waveform, sr = torchaudio.load(inference_media)
-    except Exception as e:
-        print(f"\033[1;33mWarning: Direct torchaudio load failed ({e}). Attempting PCM sanitization...\033[0m")
-        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_name}.wav')
-        try:
-            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', inference_media, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
-            try:
-                waveform, sr = torchaudio.load(sanitized_temp_path)
-            except:
-                waveform_np, sr = sf.read(sanitized_temp_path)
-                waveform = torch.from_numpy(waveform_np).float().T if waveform_np.ndim > 1 else torch.from_numpy(waveform_np).float().unsqueeze(0)
-            inference_media = sanitized_temp_path
-        except Exception as generic_err:
-            print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
-            return
+    # --- PHASE 6: Waveform Loading ---
+    waveform, sr = torchaudio.load(inference_media)
 
     import gc
     if sr != sample_rate:
@@ -977,9 +973,10 @@ if __name__ == '__main__':
 
     print(f"Dependency Versions:")
     print(f"MoviePy: {moviepy.__version__}")
-    print(f"Torchaudio: {torchaudio.__version__}")
-    # May need to be disabled as it errors if installed some weird version 0 dev. 
-    print(f"Torchcodec: {torchcodec.__version__}") 
+    print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
+    # May need to be disabled as it errors if installed some weird version 0 dev.
+    print(f"Torchcodec: {torchcodec.__version__ if torchcodec else 'Not Available'}")
+ 
     print()
 
     if len(sys.argv) == 1:
