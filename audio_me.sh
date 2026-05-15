@@ -89,6 +89,8 @@ CSV_PATH="${OUTPUT_DIR}/full_event_log.csv"
 if [[ -f "$CSV_PATH" ]]; then
     echo
     echo "📊  Launching Shapash Correlations Dashboard..."
+    echo "Note: The dashboard explains ONE specific sound class (the target)."
+    echo "Each .pkl file is a targeted 'Acoustic Brain', not a universal model for all classes."
     python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
 else
     echo

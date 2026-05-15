@@ -54,10 +54,12 @@ def main():
         avg_p = top_sounds.iloc[0]
 
     print("Test: explaining the most popular target class: " + str(target) + " (avg prob: " + str(round(avg_p, 4)) + ")")
+    print("Note: Each .pkl 'brain' is specific to ONE target class. It is NOT universal for all classes.")
 
     # 3.5 Idempotency Check (The "Persistence" Phase)
     source_dir = os.path.dirname(os.path.abspath(args.csv_path))
-    brain_filename = f"shapash_brain_speech.pkl"
+    safe_target = str(target).replace(", ", "_").replace(" ", "_").lower()
+    brain_filename = f"shapash_brain_{safe_target}.pkl"
     brain_path = os.path.join(source_dir, brain_filename)
 
     xpl = None
@@ -114,7 +116,7 @@ def main():
 
     # 9. Launch the App (Dash 4.0 compatible)
     print("initializing webapp...")
-    xpl.init_app()
+    xpl.init_app(title_story=f"Acoustic Explanation: {target}")
     app = xpl.smartapp.app
 
     print("--------------------------------------------------")
