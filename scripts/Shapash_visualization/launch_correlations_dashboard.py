@@ -5,12 +5,14 @@ from shapash import SmartExplainer
 import os
 import argparse
 import subprocess
+import joblib
+import glob
 
 def main():
     # 1. Setup Command Line Arguments
     parser = argparse.ArgumentParser(description="Universal Shapash Acoustic Explainer")
     parser.add_argument("csv_path", help="Path to the full_event_log.csv file")
-    parser.add_argument("--target", help="Specific sound class to explain (default: automatic top sound)", default=None)
+    parser.add_argument("--target", help="Specific sound class to explain (default: the top sound detected)", default=None)
     parser.add_argument("--estimators", type=int, help="Number of trees in Random Forest", default=20)
     parser.add_argument("--samples", type=int, help="Number of background samples to include", default=200)
     
@@ -38,7 +40,7 @@ def main():
 
     # 3. Target Selection
     sounds_only = df.drop(columns=["time"])
-    
+
     if args.target:
         target = args.target
         if target not in sounds_only.columns:
@@ -51,53 +53,64 @@ def main():
         target = top_sounds.index[0]
         avg_p = top_sounds.iloc[0]
 
-    print("explaining target: " + str(target) + " (avg prob: " + str(round(avg_p, 4)) + ")")
+    print("Test: explaining the most popular target class: " + str(target) + " (avg prob: " + str(round(avg_p, 4)) + ")")
 
-    # 4. Prepare Features
-    X = sounds_only.drop(columns=[target])
-    y = df[target]
-
-    # Filter features: only keep those with mean probability > 0.001 to keep it fast
-    active_mask = X.mean() > 0.001
-    X = X.loc[:, active_mask]
-    print("analyzing " + str(len(X.columns)) + " features for " + str(target))
-
-    # 5. Train the "Explainer" Model
-    print(f"training model with {args.estimators} estimators...")
-    model = RandomForestRegressor(n_estimators=args.estimators, random_state=42)
-    model.fit(X, y)
-
-    # 6. Strategic Sampling for the WebApp
-    peaks_indices = df.sort_values(by=target, ascending=False).head(20).index.tolist()
-    bg_indices = X.sample(n=min(args.samples, len(X)), random_state=42).index.tolist()
-    sample_indices = sorted(list(set(peaks_indices + bg_indices)))
-
-    X_sample = X.loc[sample_indices]
-
-    print("compiling shapash on " + str(len(X_sample)) + " samples...")
-    xpl = SmartExplainer(model=model)
-    xpl.compile(x=X_sample)
-
-    # 7. COMPUTE AND DISPLAY SUMMARY (The "Peek" Phase)
-    print("computing global importance...")
-    xpl.compute_features_import()
-    
-    print("\n--- TOP ACOUSTIC WEIGHTS (PREDICTORS FOR " + str(target).upper() + ") ---")
-    if isinstance(xpl.features_imp, pd.Series):
-        print(xpl.features_imp.sort_values(ascending=False).head(10))
-    else:
-        # In case of list/dict (multi-class logic)
-        print(xpl.features_imp)
-    print("--------------------------------------------------\n")
-
-    # 8. SAVE THE BRAIN (The "Library" Phase)
+    # 3.5 Idempotency Check (The "Persistence" Phase)
     source_dir = os.path.dirname(os.path.abspath(args.csv_path))
-    safe_target = str(target).replace(", ", "_").replace(" ", "_").lower()
-    brain_filename = f"shapash_brain_{safe_target}.pkl"
+    brain_filename = f"shapash_brain_speech.pkl"
     brain_path = os.path.join(source_dir, brain_filename)
+
+    xpl = None
+    if os.path.exists(brain_path):
+        print(f"found existing brain for {target}. loading...")
+        try:
+            xpl = joblib.load(brain_path)
+        except Exception as e:
+            print(f"warning: could not load existing brain: {e}. retraining...")
+
+    if xpl is None:
+        # 4. Prepare Features
+        X = sounds_only.drop(columns=[target])
+        y = df[target]
+
+        # Filter features: only keep those with mean probability > 0.001 to keep it fast
+        active_mask = X.mean() > 0.001
+        X = X.loc[:, active_mask]
+        print("analyzing " + str(len(X.columns)) + " features for " + str(target))
+
+        # 5. Train the "Explainer" Model
+        print(f"training model with {args.estimators} estimators...")
+        model = RandomForestRegressor(n_estimators=args.estimators, random_state=42)
+        model.fit(X, y)
+
+        # 6. Strategic Sampling for the WebApp
+        peaks_indices = df.sort_values(by=target, ascending=False).head(20).index.tolist()
+        bg_indices = X.sample(n=min(args.samples, len(X)), random_state=42).index.tolist()
+        sample_indices = sorted(list(set(peaks_indices + bg_indices)))
+
+        X_sample = X.loc[sample_indices]
+
+        print("compiling shapash on " + str(len(X_sample)) + " samples...")
+        xpl = SmartExplainer(model=model)
+        xpl.compile(x=X_sample)
+
+        # 7. COMPUTE AND DISPLAY SUMMARY (The "Peek" Phase)
+        print("computing global importance...")
+        xpl.compute_features_import()
+        
+        # 8. SAVE THE BRAIN (The "Library" Phase)
+        print("saving acoustic brain to: " + brain_path)
+        xpl.save(brain_path)
     
-    print("saving acoustic brain to: " + brain_path)
-    xpl.save(brain_path)
+    # 7.5 Display Summary (Always do this)
+    print("\n--- TOP ACOUSTIC WEIGHTS (PREDICTORS FOR " + str(target).upper() + ") ---")
+    if hasattr(xpl, 'features_imp') and isinstance(xpl.features_imp, pd.Series):
+        print(xpl.features_imp.sort_values(ascending=False).head(10))
+    elif hasattr(xpl, 'features_imp'):
+        print(xpl.features_imp)
+    else:
+        print("Summary unavailable (brain might be from older version)")
+    print("--------------------------------------------------\n")
 
     # 9. Launch the App (Dash 4.0 compatible)
     print("initializing webapp...")
@@ -106,19 +119,20 @@ def main():
 
     print("--------------------------------------------------")
     print("DASHBOARD STARTING (Explaining " + str(target) + ")...")
-    print("Open your browser at: http://localhost:8050")
     print("--------------------------------------------------")
-
     '''
     # Auto-open the local server using the system 'open' command in background
     try:
         # We use a background shell command with sleep to give the server a moment to start
-        subprocess.Popen('open http://localhost:8050', shell=True)
+        # On Linux, 'xdg-open' is the equivalent of 'open'
+        subprocess.Popen('sleep 2 && xdg-open http://localhost:8050', shell=True)
     except Exception as e:
         print(f"Warning: Could not auto-open browser: {e}")
+        
+    '''
 
     app.run(debug=False, host="0.0.0.0", port=8050)
-    '''
 
 if __name__ == "__main__":
     main()
+

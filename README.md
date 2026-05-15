@@ -54,6 +54,31 @@ CUDA_VISIBLE_DEVICES=0 python3 pytorch/inference.py audio_tagging \
     --cuda
 ```
 
+## Modern Workflow & "Smart Skip" Features
+
+The codebase has been upgraded for efficiency and interactive analysis, particularly for long-form recordings and iterative exploration.
+
+### 1. High-Performance Inference (`audio_me.sh`)
+The `audio_me.sh` script is the primary entry point for Sound Event Detection. It uses a **"Smart Skip" (Idempotent)** strategy:
+- **Phase 1: Inference Check.** If the output directory and key files (like `full_event_log.csv`) already exist, the script skips the heavy neural network processing entirely, saving significant time and CPU/Battery.
+- **Phase 2: Automatic Dashboard.** After inference (or after detecting existing results), it automatically launches the **Shapash Correlations Dashboard**.
+
+### 2. Shapash "Acoustic Brain" Persistence
+The dashboard launcher (`scripts/Shapash_visualization/launch_correlations_dashboard.py`) is now momentum-aware:
+- **Instant Load:** It scans for a pre-trained "acoustic brain" (`.pkl` file). If found, it bypasses the Random Forest training and SHAP compilation, taking you to the interactive dashboard in seconds.
+- **Auto-Discovery:** It automatically identifies the most prominent sound class (e.g., "Speech") to explain if no target is specified.
+- **Interactive Keep-Alive:** The Dash server remains active in the foreground, allowing you to explore the acoustic correlations at `http://localhost:8050`.
+
+### 3. Usage Example (The "Daily Driver")
+```bash
+# Analyze a recording and launch the dashboard
+bash audio_me.sh path/to/recording.mp4
+
+# Re-run the same command later
+# (Instantly re-opens the dashboard without retraining)
+bash audio_me.sh path/to/recording.mp4
+```
+
 ## Sound event detection using pretrained models
 Some of PANNs such as DecisionLevelMax (the best), DecisionLevelAvg, DecisionLevelAtt) can be used for frame-wise sound event detection. For example, execute the following commands to inference sound event detection results on this [audio](resources/R9_ZSCveAHg_7s.wav):
 
