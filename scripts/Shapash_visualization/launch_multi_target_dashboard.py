@@ -12,7 +12,7 @@ import time
 import psutil
 
 # --- VERSIONING ---
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 # ------------------
 
 # Suppress warnings for cleaner CLI output
@@ -42,9 +42,11 @@ def main():
         return
 
     source_dir = os.path.dirname(os.path.abspath(args.csv_path))
-    brain_path = os.path.join(source_dir, "shapash_unified_acoustic_brain.pkl")
+    # brain_path = os.path.join(source_dir, "shapash_unified_acoustic_brain.pkl")
     
     xpl = None
+    # Persistence Disabled: Compilation is fast enough (~8s) to avoid 180MB storage overhead
+    '''
     if os.path.exists(brain_path) and not args.force:
         print(f"Found existing unified brain at {brain_path}. Loading...")
         try:
@@ -55,6 +57,7 @@ def main():
                 xpl.model.predict_proba = MultiOutputPredictProba(xpl.model)
         except Exception as e:
             print(f"Warning: Could not load existing brain: {e}. Retraining...")
+    '''
 
     if xpl is None:
         print(f"Loading {args.csv_path}...")
@@ -150,12 +153,12 @@ def main():
             y_target=y_pred_sample
         )
 
-        # 7. Persistence
-        print(f"Saving unified brain to: {brain_path}")
-        try:
-            xpl.save(brain_path)
-        except Exception as e:
-            print(f"Warning: Could not save brain: {e}")
+        # 7. Persistence Disabled (Space efficiency)
+        # print(f"Saving unified brain to: {brain_path}")
+        # try:
+        #    xpl.save(brain_path)
+        # except Exception as e:
+        #    print(f"Warning: Could not save brain: {e}")
 
         # --- END PERFORMANCE MEASUREMENT ---
         end_time = time.perf_counter()

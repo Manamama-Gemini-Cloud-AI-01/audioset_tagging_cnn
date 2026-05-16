@@ -25,7 +25,7 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-#Torch and torchaudio and coverage are version sensitive. Careful with: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
+#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can. Be careful with below over apt parallel install then: python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu
 
 import torch
 # Handle version-sensitive imports: Torchaudio is essential for tensor-land processing and CUDA efficiency.
@@ -34,7 +34,7 @@ try:
 except (OSError, ImportError) as e:
     print(f"\033[1;31mERROR: torchaudio and torch are not compatible ({e}). We stop.\033[0m")
     print("Please synchronize your versions to fix the 'undefined symbol' or import error:")
-    print("\033[1;32mpip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu\033[0m")
+    print("\033[1;32mpip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu\033[0m")
     sys.exit(1)
 
 try:
@@ -934,7 +934,7 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.9") 
+    print(f"Eventogrammer, version 6.8.10") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
