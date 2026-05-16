@@ -212,3 +212,13 @@ To enable full-length video visualization on mobile devices (Android/Termux), th
     *   **Speed:** Rendering jumped from ~17 it/s to **130+ it/s** (a ~7x improvement).
     *   **Efficiency:** CPU utilization increased from ~150% to **460%+**, finally saturating all available cores for encoding.
     *   **Mobile Impact:** This optimization makes `--dynamic_eventogram` viable on Android devices, where CPU cycles are precious.
+
+## 10. Shapash Unified Dashboard (Performance & Logic)
+
+The "Unified Acoustic Brain" (`launch_multi_target_dashboard.py`) is designed for sub-10 second execution on Android/Termux through four key optimizations:
+
+1.  **The "Tiny Forest" Strategy:** It uses a Random Forest with only 10 estimators and a max depth of 5. While small, this is sufficient to capture the dominant acoustic correlations (e.g., "Music" correlating with "Piano") without the heavy compute cost of a 100+ tree model.
+2.  **Strategic Sampling:** Instead of explaining every single time-frame (which could be 30,000+ for a 5-minute clip), it samples 200 representative points. This "High-Resolution Snapshot" approach reduces SHAP calculation time from hours to seconds.
+3.  **Unified Ingestion:** The model trains on all 527 sound classes as features simultaneously. This allows the dashboard to show how different sounds compete or coexist in the same environment.
+4.  **Identity Masking:** To prevent "Semantic Noise," the script automatically masks self-correlations. A sound is never allowed to "explain" itself, forcing the model to find the most relevant *external* predictors (e.g., explaining "Bark" via "Animal" or "Dog").
+

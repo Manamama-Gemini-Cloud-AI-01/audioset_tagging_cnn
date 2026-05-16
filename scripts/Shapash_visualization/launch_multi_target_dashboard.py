@@ -8,9 +8,11 @@ import argparse
 import joblib
 from tqdm import tqdm
 import warnings
+import time
+import psutil
 
 # --- VERSIONING ---
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 # ------------------
 
 # Suppress warnings for cleaner CLI output
@@ -58,6 +60,11 @@ def main():
         print(f"Loading {args.csv_path}...")
         df = pd.read_csv(args.csv_path)
         
+        # --- START PERFORMANCE MEASUREMENT ---
+        start_time = time.perf_counter()
+        process = psutil.Process(os.getpid())
+        mem_before = process.memory_info().rss / (1024 * 1024)
+
         # 1. Prepare Data - "One CSV, One Model"
         sounds_df = df.drop(columns=["time"]) if "time" in df.columns else df
         
@@ -149,6 +156,15 @@ def main():
             xpl.save(brain_path)
         except Exception as e:
             print(f"Warning: Could not save brain: {e}")
+
+        # --- END PERFORMANCE MEASUREMENT ---
+        end_time = time.perf_counter()
+        mem_after = process.memory_info().rss / (1024 * 1024)
+        print(f"\n--- PERFORMANCE REPORT (Brain Generation) ---")
+        print(f"Duration: {end_time - start_time:.2f} seconds")
+        print(f"Memory Delta: {mem_after - mem_before:.2f} MB")
+        print(f"Peak Memory (RSS): {mem_after:.2f} MB")
+        print(f"----------------------------------------------\n")
 
     # 8. Launch WebApp
     print("\n--------------------------------------------------")

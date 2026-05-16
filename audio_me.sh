@@ -91,6 +91,8 @@ if [[ -f "$CSV_PATH" ]]; then
     echo "📊  Launching Unified Shapash Dashboard..."
     echo "Note: This dashboard explains the Top 50 sounds detected."
     echo "Use the GUI dropdown to switch between sound targets."
+    # Speed Hack: Uses 'Tiny Forest' (10 estimators) and 'Strategic Sampling' (200 points) 
+    # to maintain sub-10s 'Brain' generation on mobile devices.
     python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_multi_target_dashboard.py" "$CSV_PATH"
 
     # LEGACY: Single-target dashboard
