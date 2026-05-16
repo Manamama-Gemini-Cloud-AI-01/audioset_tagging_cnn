@@ -116,7 +116,8 @@ def main():
 
     # 9. Launch the App (Dash 4.0 compatible)
     print("initializing webapp...")
-    xpl.init_app(title_story=f"Acoustic Explanation: {target}")
+    xpl.title_story = f"Acoustic Explanation: {target}"
+    xpl.init_app()
     app = xpl.smartapp.app
 
     print("--------------------------------------------------")
