@@ -41,7 +41,7 @@ Running neural networks in a mobile PRoot environment can be fragile. If you enc
 2.  **Memory Crashes:** PRoot environments are sensitive to multi-threading. The script automatically limits TensorFlow to 2 threads in Bridge Mode to prevent "Kill" signals from the kernel.
 3.  **Path Issues:** Always ensure you are running the script from a directory that can access the `models/` folder in the project root.
 
-## 3. Neural Models Setup
+## 4. Neural Models Setup
 
 The `essentia_acoustic_dna.py` script expects models to be located in a `models/` directory relative to the project root.
 
@@ -67,7 +67,7 @@ wget --no-check-certificate https://essentia.upf.edu/models/classification-heads
 wget --no-check-certificate https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-discogs-effnet-1.json
 ```
 
-## 4. Usage
+## 5. Usage
 
 ```bash
 # Classic Forensic Analysis
