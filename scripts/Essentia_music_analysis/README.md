@@ -12,17 +12,34 @@ This directory contains scripts for "Acoustic Archeology" using the Essentia lib
 ### `essentia_acoustic_dna.py` (The Neural Eye)
 *   **Purpose:** Unlocks high-level "Acoustic DNA" using deep learning.
 *   **Capabilities:** Multi-target Genre classification (400 classes), Acoustic/Electronic detection, and Voice/Instrumental identification.
-*   **Requirements:** Must have `essentia-tensorflow` installed.
+*   **Requirements:** Supports two modes:
+    1.  **Standard Mode:** Uses `essentia-tensorflow` (Best for PC/Desktop).
+    2.  **Bridge Mode:** Uses standard `essentia` + `tensorflow` (Fallback for Termux/Debian PRoot).
 
 ## 2. Installation
 
-To use the full "Neural Eye" capabilities, you must install the TensorFlow-enabled version of Essentia:
-
+### Option A: Standard (PC / Desktop Linux)
+Best for high-speed analysis using the built-in C++ TensorFlow runtime.
 ```bash
 pip install essentia-tensorflow
 ```
 
-*Note: If you previously had the standard `essentia` package installed, you may need to run `pip install --force-reinstall essentia-tensorflow` to ensure the neural components are correctly linked.*
+### Option B: Hybrid Fallback (Termux / Debian PRoot)
+Required if `essentia-tensorflow` fails due to ABI compatibility (glibc vs bionic) issues.
+```bash
+# Install standard essentia (usually built from source or native package)
+pip install essentia
+# Install standard tensorflow for the "Universal Bridge"
+pip install tensorflow
+```
+
+## 3. Troubleshooting (Termux / Debian PRoot)
+
+Running neural networks in a mobile PRoot environment can be fragile. If you encounter issues:
+
+1.  **ABI Mismatches:** If you see `ImportError: libtensorflow.so: cannot open shared object file`, you are likely trying to use the PC-based `essentia-tensorflow` wheel in a mobile environment. Switch to **Option B** (Bridge Mode).
+2.  **Memory Crashes:** PRoot environments are sensitive to multi-threading. The script automatically limits TensorFlow to 2 threads in Bridge Mode to prevent "Kill" signals from the kernel.
+3.  **Path Issues:** Always ensure you are running the script from a directory that can access the `models/` folder in the project root.
 
 ## 3. Neural Models Setup
 
