@@ -966,6 +966,8 @@ if __name__ == '__main__':
     print("Tips & Environment Hacks:")
     print("* For 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
     print("  Run: pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("* If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:")
+    print("  Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)")
     print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
@@ -976,6 +978,22 @@ if __name__ == '__main__':
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
     # May need to be disabled as it errors if installed some weird version 0 dev.
     print(f"Torchcodec: {torchcodec.__version__ if torchcodec else 'Not Available'}")
+ 
+    print()
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
+
+    args = parser.parse_args()
+    audio_path = args.audio_path
+
+
+    if args.mode == 'audio_tagging':
+        audio_tagging(args)
+    else:
+        sound_event_detection(args)
+lse 'Not Available'}")
  
     print()
 
