@@ -179,26 +179,22 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
 
-## 9. Memory-Efficient Architecture (v6.6.0 Update)
+## 9. Memory-Efficient Architecture (v6.8.12 Update)
 
-To handle long-form recordings (e.g., >30 minutes) on resource-constrained devices like Android (Termux), the inference script was refactored to eliminate "Aggregation Spikes."
+To handle long-form recordings (e.g., >10 hours) on resource-constrained devices, the inference script uses a multi-layered memory safety strategy.
 
-### 1. The "Aggregation Bottleneck" Problem
-Previously, the script would process 3-minute chunks but keep all high-resolution results (100 FPS) in RAM. For a 34-minute file, this created a massive cumulative memory load:
-- **Full Waveform (32kHz):** ~270 MB
-- **Full Framewise Matrix (527 classes @ 100 FPS):** ~450 MB
-- **Full Spectrogram (Complex STFT):** ~850 MB
-- **Result:** Usage would spike toward 3GB, triggering OOM crashes in Termux.
+### 1. The "Aggregation Bottleneck" (v6.6.0 Legacy)
+Previously, the script would process 3-minute chunks but keep all high-resolution results in RAM. The results would spike toward 3GB for 30+ minute files.
 
-### 2. The "Lean" Solution
-The new architecture uses a **"Stream and Prune"** strategy:
-- **Direct Disk Streaming:** The high-resolution (100 FPS) probability matrix is written directly to `full_event_log.csv` during the inference loop. RAM usage for this data is now constant (single row) rather than cumulative.
-- **50x Internal Downsampling:** All internal RAM structures used for visualization (Eventograms, Dashboard, Spectrogram) are now **max-pooled to 2 FPS** as they are generated. This reduces the visualization RAM footprint by 98% (e.g., 900MB → 18MB).
-- **Chunked Post-Processing:** The Spectrogram (STFT) is calculated in 3-minute segments and immediately downsampled, eliminating the whole-file "kill shot" memory spike.
-- **Peak Preservation:** By using `max-pooling` during downsampling, the script ensures that short, sharp sound events (like a car toot or a click) are still accurately represented in the 2 FPS graphs even if they fall between sample points.
+### 2. The "Lean" Solution (Stream and Prune)
+- **Direct Disk Streaming:** High-res (100 FPS) results are written directly to `full_event_log.csv`. 
+- **50x Internal Downsampling:** Visualization structures are max-pooled to 2-5 FPS.
 
-### 3. Verification in Termux
-When running version 6.6.0, the memory usage (`top` or `free`) remains remarkably flat throughout the entire duration of long files, making it safe for mobile deployment.
+### 3. The "Surgical Load" Refactor (v6.8.12)
+The most significant memory win. Previously, `torchaudio.load()` would decode the **entire file** into RAM before chunking. For a 10-hour file, this created a 4.6GB "Loading Plateau."
+- **Seek-Based Decoding:** The script now uses `frame_offset` to decode only the active 3-minute chunk from disk. 
+- **Sample Rate Probe:** Since newer `torchaudio` versions (2.11+) may lack the `.info()` attribute due to C++ backend mismatches, the script uses a 1-frame probe load to determine the **Native Sample Rate** for precise seeking.
+- **Flat Memory Profile:** RAM usage is now constant (capped at ~50MB per chunk) regardless of file length, making 10-hour runs safe on 8GB machines.
 
 ### 4. Video Rendering Speed Hack (v6.6.3 Update)
 To enable full-length video visualization on mobile devices (Android/Termux), the rendering pipeline was refactored to eliminate the "Rendering Bottleneck" caused by redundant Matplotlib and MoviePy compositing calls.
@@ -225,12 +221,21 @@ The "Unified Acoustic Brain" (`launch_multi_target_dashboard.py`) is designed fo
 ## 11. Operational Insights & Cross-Tool Integration (2026 Update)
 
 ### 1. High-Resolution Inference Safety
-Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.8.10) on full tracks is **not "scary"** for system resources or terminal context. 
+Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.8.12) on full tracks is **not "scary"** for system resources or terminal context. 
 - **Terminal Hygiene:** The script is engineered to output only concise high-level progress and info messages (e.g., "Chunk at Xm finished"). 
 - **Data Redirection:** All massive probability matrices and frame-wise logs are redirected directly to disk (`full_event_log.csv`). 
 - **CLI Compatibility:** The Gemini CLI environment safely handles any unexpected long printouts by redirecting them to temporary files, ensuring your active context window remains clean for analytical reasoning.
 
-### 2. Forensic Complement: Essentia
+### 2. The "32kHz Ritual" (Inference vs. Native SR)
+You may notice that **Inference SR** (32,000 Hz) is often higher than the **Native SR** (e.g., 16,000 Hz). 
+- **Mandatory Compatibility:** The CNN models were trained exclusively on 32kHz audio. 
+- **Acoustic Focus:** Upsampling does not add new information, but it prevents the model from perceiving the world as "half-speed/octave-lower." It ensures the mathematical "paintbrushes" of the model land on the correct frequencies.
+
+### 3. Environment & Dependency Hacks
+- **The Numba/Coverage Conflict:** Some environments (Ubuntu 24.04+) have a version clash between `numba` and `python3-coverage`. If `AttributeError: module 'coverage.types' has no attribute 'Tracer'` occurs, **uninstall the system coverage package** (`sudo apt remove python3-coverage`).
+- **The "Hollow" Torchaudio:** If `AttributeError: module 'torchaudio' has no attribute 'info'` occurs, it indicates a binary mismatch (often after a `whisperx` update). The script now detects this and recommends a clean reinstall of `torch` and `torchaudio` via the `--extra-index-url` provided in the "Tips" section.
+
+### 4. Forensic Complement: Essentia
 While PANNs excel at identifying the **"Physical Reality"** (e.g., specific instruments, textures, or "Acoustic Metaphors"), it does not track musical grammar like Tempo or Key. To achieve a complete "Acoustic Archeology" profile, integrate **Essentia**:
 - **Purpose:** Use for precise BPM detection, Key/Scale estimation, and Danceability scores.
 - **Workflow:** Run an Essentia-based Python script alongside PANNs to compare the mathematical downbeats with the AI's sound event peaks.
