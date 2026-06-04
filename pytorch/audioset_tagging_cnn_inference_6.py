@@ -934,7 +934,7 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.10") 
+    print(f"Eventogrammer, version 6.8.11") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
@@ -961,6 +961,7 @@ if __name__ == '__main__':
     print(f"If the file is too long, use FFmpeg to segment it first:") 
     print(f"mkdir split_input_media && cd split_input_media && \\")
     print(f"ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print(f"time bash -c 'for file in ""*; do bash audio_me.sh "$file" --dynamic_eventogram; done'")
     print()
 
     print("Tips & Environment Hacks:")
