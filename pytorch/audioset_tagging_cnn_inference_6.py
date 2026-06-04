@@ -25,7 +25,7 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can. If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the  below over their parallel apt based installs: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions
+#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can or just remove coverage.
 
 import torch
 # Handle version-sensitive imports: Torchaudio is essential for tensor-land processing and CUDA efficiency.
@@ -947,16 +947,13 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.12") 
+    print(f"Eventogrammer, version 6.9.1") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
     print(f"Recent Material Changes:")
-    print(f"* Surgical Load: Memory-safe chunked decoding via torchaudio.info (OOM Fix for 10h+ files).")
+    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
-    print(f"* Speed Hack: Persistent Matplotlib figures with Artist Updates.")
-    print(f"* Visual Fix: Proper window centering for scrolling eventograms.")
-    print(f"* Refactor: Gemini AI rationalized path management and code structure.")
     print()
 
     print(f"Note on the models:")   
@@ -986,10 +983,12 @@ if __name__ == '__main__':
     print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
+    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions")
     print()
 
     print(f"Dependency Versions:")
     print(f"MoviePy: {moviepy.__version__}")
+    print(f"Torch: {torch.__version__ if torch else 'Not Available'}")
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
     # May need to be disabled as it errors if installed some weird version 0 dev.
     print(f"Torchcodec: {torchcodec.__version__ if torchcodec else 'Not Available'}")
@@ -1012,15 +1011,3 @@ if __name__ == '__main__':
  
     print()
 
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(1)
-
-    args = parser.parse_args()
-    audio_path = args.audio_path
-
-
-    if args.mode == 'audio_tagging':
-        audio_tagging(args)
-    else:
-        sound_event_detection(args)
