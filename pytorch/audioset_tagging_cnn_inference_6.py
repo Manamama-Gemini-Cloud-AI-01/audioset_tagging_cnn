@@ -423,14 +423,23 @@ def sound_event_detection(args):
     native_chunk_samples = int(chunk_duration * native_sr)
 
     # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
-    vis_downsample = inference_fps // viz_fps
+    # Aesthetic Decoupling: Cap RAM aggregation arrays to ~2500 columns for O(1) memory
+    max_vis_cols = 2500
+    potential_vis_frames = int(duration * viz_fps)
+    vis_agg_factor = max(1, int(np.ceil(potential_vis_frames / max_vis_cols)))
+    
+    # Store the original viz_fps for display, but update viz_fps for internal logic
+    effective_viz_fps = viz_fps / vis_agg_factor
+    vis_downsample = max(1, int(inference_fps / effective_viz_fps))
     
     framewise_vis_list = []
     stft_vis_list = []
     
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
-    print(f"📊  Starting surgical inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
+    print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
+    if vis_agg_factor > 1:
+        print(f"    💡 Aesthetic Decoupling: Aggregating {vis_agg_factor}x into {max_vis_cols} RAM columns.")
 
     resampler = None
     if native_sr != sample_rate:
@@ -504,9 +513,9 @@ def sound_event_detection(args):
     
     # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
     frames_num = len(framewise_output)
-    duration = frames_num / viz_fps
+    duration = frames_num / effective_viz_fps
     
-    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{viz_fps} Hz (Data Frames)\033[1;0m')
+    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{effective_viz_fps:.4f} Hz (Data Frames)\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
@@ -535,9 +544,9 @@ def sound_event_detection(args):
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num, viz_fps * tick_interval)
+    x_ticks = np.arange(0, frames_num, effective_viz_fps * tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels([int(t / viz_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
+    axs[1].xaxis.set_ticklabels([int(t / effective_viz_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num); axs[1].set_yticks(np.arange(0, top_k)); axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
     axs[1].set_xlabel('Seconds', fontsize=14); axs[1].xaxis.set_ticks_position('bottom')
@@ -570,14 +579,14 @@ def sound_event_detection(args):
             elif in_event and prob < offset_threshold:
                 in_event = False
                 duration_frames = frame_index - event_start_frame
-                duration_secs = duration_frames / viz_fps
+                duration_secs = duration_frames / effective_viz_fps
                 
                 if duration_secs >= min_event_duration_seconds:
                     event_block_probs = framewise_output[event_start_frame:frame_index, label_idx]
                     events_by_class[label].append({
                         'sound_class': label,
-                        'start_time_seconds': round(event_start_frame / viz_fps, 3),
-                        'end_time_seconds': round(frame_index / viz_fps, 3),
+                        'start_time_seconds': round(event_start_frame / effective_viz_fps, 3),
+                        'end_time_seconds': round(frame_index / effective_viz_fps, 3),
                         'duration_seconds': round(duration_secs, 3),
                         'peak_probability': float(np.max(event_block_probs)),
                         'average_probability': float(np.mean(event_block_probs))
@@ -627,7 +636,7 @@ def sound_event_detection(args):
             if prob > ai_threshold:
                 if current_event is None:
                     current_event = {
-                        "start": round(frame_index / viz_fps, 3),
+                        "start": round(frame_index / effective_viz_fps, 3),
                         "peak": float(prob), "trace": [float(prob)]
                     }
                 else:
@@ -641,7 +650,7 @@ def sound_event_detection(args):
                 
                 events_derivative[label].append({
                     "start_time": current_event["start"],
-                    "end_time": round(frame_index / viz_fps, 3),
+                    "end_time": round(frame_index / effective_viz_fps, 3),
                     "peak_prob": current_event["peak"],
                     "delta_trace": zip_trace(deltas)
                 })
@@ -653,7 +662,7 @@ def sound_event_detection(args):
             for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
             events_derivative[label].append({
                 "start_time": current_event["start"],
-                "end_time": round(len(probs_stream) / viz_fps, 3),
+                "end_time": round(len(probs_stream) / effective_viz_fps, 3),
                 "peak_prob": current_event["peak"],
                 "delta_trace": zip_trace(deltas)
             })
@@ -670,7 +679,7 @@ def sound_event_detection(args):
     popularity = np.sum(framewise_output, axis=0)
     top_50_indices = np.argsort(popularity)[::-1][:50]
     
-    times = [round(i / viz_fps, 2) for i in range(frames_num)]
+    times = [round(i / effective_viz_fps, 2) for i in range(frames_num)]
     traces_data = []
     for idx in top_50_indices:
         traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
@@ -736,7 +745,7 @@ def sound_event_detection(args):
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
         if args.dynamic_eventogram:
             output_video_path = os.path.join(output_dir, f"{base_name}{tag_suffix}_eventogram_dynamic.mp4")
-            window_frames = int(args.window_duration * viz_fps)
+            window_frames = int(args.window_duration * effective_viz_fps)
             half_window = window_frames // 2 
 
             # PRECOMPUTE: Map every data point to its local acoustic window (once per run)
@@ -748,8 +757,8 @@ def sound_event_detection(args):
                 # Adaptive logic: Try to center the window on acoustic "peaks" rather than strict time
                 if args.use_adaptive_window:
                     kl_threshold = 0.5
-                    lookahead_f = int(adaptive_lookahead * viz_fps)
-                    for offset in range(half_window, half_window + lookahead_f, int(viz_fps)):
+                    lookahead_f = int(adaptive_lookahead * effective_viz_fps)
+                    for offset in range(half_window, half_window + lookahead_f, int(max(1, effective_viz_fps))):
                         if start_f - offset >= 0:
                             prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
                             curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
@@ -789,7 +798,7 @@ def sound_event_detection(args):
                 """High-speed redraw using set_data instead of creating new plots."""
                 data = precomputed_data[i]
                 s_f, e_f = data['start'], data['end']
-                t_start, t_end, t_curr = s_f / viz_fps, e_f / viz_fps, i / viz_fps
+                t_start, t_end, t_curr = s_f / effective_viz_fps, e_f / effective_viz_fps, i / effective_viz_fps
                 
                 im_spec.set_data(stft_log[:, s_f:e_f]); im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
                 im_event.set_data(data['out'].T); im_event.set_extent([t_start, t_end, 0, top_k])
@@ -827,7 +836,7 @@ def sound_event_detection(args):
         frame_cache = {"last_i": -1, "last_img": None}
 
         def make_frame(t):
-            i = min(int(t * viz_fps), frames_num - 1)
+            i = min(int(t * effective_viz_fps), frames_num - 1)
             if i == frame_cache["last_i"]: return frame_cache["last_img"]
             
             img = draw_strategy(i)

@@ -218,7 +218,24 @@ The "Unified Acoustic Brain" (`launch_multi_target_dashboard.py`) is designed fo
 3.  **Unified Ingestion:** The model trains on all 527 sound classes as features simultaneously. This allows the dashboard to show how different sounds compete or coexist in the same environment.
 4.  **Identity Masking:** To prevent "Semantic Noise," the script automatically masks self-correlations. A sound is never allowed to "explain" itself, forcing the model to find the most relevant *external* predictors (e.g., explaining "Bark" via "Animal" or "Dog").
 
-## 11. Operational Insights & Cross-Tool Integration (2026 Update)
+## 12. Strategic Roadmap: Aesthetic Decoupling (Plan)
+
+While the **Surgical Load** refactor (v6.8.12) solved the audio loading bottleneck, a secondary **Aggregation Creep** still exists in the visualization pipeline. For ultra-long archives (100h+), storing the 5Hz summary data in RAM becomes a new O(n) bottleneck.
+
+### 1. The Concept: "Canvas-Bound Resolution"
+The current script "over-samples the canvas"—feeding 180,000 data points into a PNG file that is only 1,275 pixels wide. 
+
+### 2. Proposed Solution: The Visual Cap
+-   **Decoupled Streams:** Distinguish between the **Forensic Stream** (100Hz data written directly to disk) and the **Visual Stream** (summarized data for the Eventogram and Dashboard).
+-   **Fixed-Width Aggregation:** Cap the horizontal resolution of in-RAM arrays (`stft` and `framewise_output`) to a constant value (e.g., 2,500 columns). 
+-   **Running Max-Pool:** As the inference loop processes 3-minute chunks, it will perform a running max-pool to collapse hundreds of data points into a single "Visual Representative." This ensures that a 10ms click is still visually rendered as a dot even in a 10-hour overview.
+
+### 3. Expected Impact
+-   **RAM Scaling:** Transition from **O(n)** (linear growth) to **O(1)** (constant footprint).
+-   **Stability:** Analyzing a 10,000-hour file will consume the same amount of RAM as a 10-minute file.
+-   **Infinite Analysis:** Enables "Forever Recorders" to be analyzed in a single pass on 8GB machines without ever triggering a Swap-storm.
+
+## 13. Operational Insights & Cross-Tool Integration (2026 Update)
 
 ### 1. High-Resolution Inference Safety
 Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.8.12) on full tracks is **not "scary"** for system resources or terminal context. 
