@@ -25,7 +25,7 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can. Be careful with below over apt parallel install then: python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu
+#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can. If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the  below over their parallel apt based installs: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions
 
 import torch
 # Handle version-sensitive imports: Torchaudio is essential for tensor-land processing and CUDA efficiency.
@@ -413,73 +413,86 @@ def sound_event_detection(args):
             ], check=True)
             inference_media = temp_video_path
 
-    # --- PHASE 6: Waveform Loading ---
-    waveform, sr = torchaudio.load(inference_media)
-
-    import gc
-    if sr != sample_rate:
-        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
-        gc.collect()
-        
-    waveform = waveform.mean(dim=0, keepdim=True)  # Downmix to mono
-    waveform_np = waveform.squeeze(0).numpy() # Move to NumPy for memory-safe chunking
+    # --- PHASE 6: Metadata Probe (Surgical Load Preparation) ---
+    # Get Native Sample Rate via a 1-frame probe (Safe for all torchaudio versions)
+    _, native_sr = torchaudio.load(inference_media, frame_offset=0, num_frames=1)
+    native_num_frames = int(duration * native_sr)
     
-    # CRITICAL: Drop torch tensors to free significant RAM immediately (essential for Termux)
-    del waveform
-    gc.collect()
-    waveform = waveform_np 
-
-    # --- PHASE 7: Chunked Model Inference (Memory-Safe) ---
+    # Calculate chunk size in native samples
     chunk_duration = 180  # 3 minutes
-    chunk_samples = int(chunk_duration * sample_rate)
+    native_chunk_samples = int(chunk_duration * native_sr)
+
+    # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
     vis_downsample = inference_fps // viz_fps
     
     framewise_vis_list = []
     stft_vis_list = []
     
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
-    print(f"📊  Starting inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
-    print(f"    Resolution: Disk {inference_fps} Hz (Data Frames) | Visualization {viz_fps} Hz (UI/RAM)")
+    print(f"📊  Starting surgical inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
+    print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
+
+    resampler = None
+    if native_sr != sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=native_sr, new_freq=sample_rate).to(device)
 
     with open(csv_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['time'] + list(labels))
         
-        for start in range(0, len(waveform), chunk_samples):
-            chunk = waveform[start:start + chunk_samples]
-            if len(chunk) < sample_rate // 10: continue
+        for start_frame in range(0, native_num_frames, native_chunk_samples):
+            # Surgical Load: Seek directly to chunk
+            chunk_waveform, _ = torchaudio.load(
+                inference_media, 
+                frame_offset=start_frame, 
+                num_frames=native_chunk_samples
+            )
             
-            # Step A: Inference
-            chunk_tensor = move_data_to_device(torch.from_numpy(chunk[None, :]).float(), device)
+            if chunk_waveform.shape[1] == 0: break
+            
+            # Step A: Pre-processing (Mono + Resample)
+            chunk_waveform = chunk_waveform.mean(dim=0, keepdim=True).to(device)
+            if resampler:
+                chunk_waveform = resampler(chunk_waveform)
+            
+            # Prepare for model (expects [batch_size, samples])
+            chunk_tensor = chunk_waveform
+            
+            # Step B: Inference
             with torch.no_grad():
                 model.eval()
-                try:
-                    batch_output_dict = model(chunk_tensor, None)
-                    chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
-                except Exception as e:
-                    print(f"\033[1;31mInference error in chunk: {e}\033[0m"); continue
+                batch_output_dict = model(chunk_tensor, None)
+                chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
             
-            # Step B: Write high-res results to disk immediately (Lean memory)
-            chunk_start_time = start / sample_rate
+            # Step C: Write high-res results to disk (Lean memory)
+            chunk_start_time = start_frame / native_sr
             csv_downsample = max(1, inference_fps // args.csv_fps)
             for i in range(0, len(chunk_out), csv_downsample):
                 timestamp = chunk_start_time + (i / inference_fps)
                 writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
             
-            # Step C: Downsample for RAM-based visualization (Max-pooling preserves short events)
+            # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
                 if len(vis_slice) > 0:
                     framewise_vis_list.append(np.max(vis_slice, axis=0))
 
-            # Step D: Chunked STFT for visualization background
-            chunk_tensor_stft = torch.from_numpy(chunk).to(device)
+            # Step E: STFT for visualization background
+            chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
+            chunk_tensor_stft = torch.from_numpy(chunk_numpy).to(device)
             chunk_stft = torch.stft(
                 chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
                 window=torch.hann_window(window_size).to(device),
                 center=True, return_complex=True
             ).abs().cpu().numpy()
             stft_vis_list.append(chunk_stft[:, ::vis_downsample])
+            
+            # Cleanup
+            del chunk_waveform, chunk_tensor, chunk_numpy, chunk_tensor_stft, chunk_stft
+            import gc
+            gc.collect()
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
             
             avail_ram = psutil.virtual_memory().available / (1024 * 1024)
             print(f"Chunk at {int(chunk_start_time/60)}m finished. (RAM Avail: {avail_ram:.0f} MB)")
@@ -934,11 +947,12 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.11") 
+    print(f"Eventogrammer, version 6.8.12") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
     print(f"Recent Material Changes:")
+    print(f"* Surgical Load: Memory-safe chunked decoding via torchaudio.info (OOM Fix for 10h+ files).")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print(f"* Speed Hack: Persistent Matplotlib figures with Artist Updates.")
     print(f"* Visual Fix: Proper window centering for scrolling eventograms.")
