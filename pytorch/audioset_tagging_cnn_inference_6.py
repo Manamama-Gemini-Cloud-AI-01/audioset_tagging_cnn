@@ -434,6 +434,10 @@ def sound_event_detection(args):
         
     native_num_frames = int(duration * native_sr)
     
+    # --- USER INTERFACE & LOGGING ---
+    duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
+    print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
+    
     # Calculate chunk size in native samples
     chunk_duration = 180  # 3 minutes
     native_chunk_samples = int(chunk_duration * native_sr)
@@ -493,22 +497,28 @@ def sound_event_detection(args):
                 batch_output_dict = model(chunk_tensor, None)
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
 
-            # Step C: Write high-res results to disk (OOM-safe streaming to HDF5)
+            # Step C: Write high-res results to disk (OOM-safe, vectorized streaming to HDF5)
             chunk_start_time = start_frame / native_sr
             csv_downsample = max(1, inference_fps // args.csv_fps)
 
-            num_rows = len(range(0, len(chunk_out), csv_downsample))
+            # Select downsampled rows from this chunk
+            downsampled_data = chunk_out[::csv_downsample]
+            num_rows = downsampled_data.shape[0]
+
+            # Pre-calculate timestamps for the downsampled rows
+            downsampled_timestamps = np.array([chunk_start_time + (i / inference_fps) 
+                                               for i in range(0, len(chunk_out), csv_downsample)], dtype='float32')
+
+            # Resize datasets in one go
             h5_dataset.resize(current_row + num_rows, axis=0)
             h5_file['timestamps'].resize(current_row + num_rows, axis=0)
 
-            for i in range(0, len(chunk_out), csv_downsample):
-                timestamp = chunk_start_time + (i / inference_fps)
-                h5_dataset[current_row] = chunk_out[i].astype('float32')
-                h5_file['timestamps'][current_row] = np.float32(timestamp)
-                current_row += 1
+            # Vectorized write
+            h5_dataset[current_row : current_row + num_rows] = downsampled_data.astype('float32')
+            h5_file['timestamps'][current_row : current_row + num_rows] = downsampled_timestamps
 
+            current_row += num_rows
             h5_file.flush()
-
             # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
@@ -527,8 +537,12 @@ def sound_event_detection(args):
 
             # Cleanup
             del chunk_waveform, chunk_tensor, chunk_numpy, chunk_tensor_stft, chunk_stft
-
+            
+            avail_ram = psutil.virtual_memory().available / (1024 * 1024)
+            print(f"Chunk at {int(chunk_start_time/60)}m finished. (RAM Avail: {avail_ram:.0f} MB)")
+            
         h5_file.close()
+
         import gc
         gc.collect()
         if device.type == 'cuda':
