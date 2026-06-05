@@ -1,0 +1,297 @@
+zezen@above-hp2-silver:~/Downloads/GitHub/audioset_tagging_cnn$ bash audio_me.sh "/media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg.mp3"
+--- AudioSet Tagging CNN Inference (SED Mode) ---
+Model Type: Cnn14_DecisionLevelMax
+Checkpoint path: /media/zezen/HP_P7_Data/Temp/AI_models/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth
+Input file and parameters: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg.mp3
+Add  --dynamic_eventogram   or  --static_eventogram  for a video of the graph with a moving marker.
+
+Note: If you see errors with sox / mp3 parsing, then apt install 'sox' and 'libsox-fmt-mp3', test it via 'sox --info /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg.mp3 ' 
+Note: Paths provided as command-line arguments should be absolute to avoid ambiguity.
+We are checking the real path of the first argument, which may hang if the file be not accessible...
+
+2026-06-05 14:47:11 above-hp2-silver numexpr.utils[148324] INFO NumExpr defaulting to 8 threads.
+Eventogrammer, version 6.11.1
+Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn
+
+Recent Material Changes:
+*H5py used instead of CSV to save disk space.
+* We completely removed moviepy: ffmpeg shall do it. Needs much testing.
+* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).
+* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.
+
+Note on the models:
+* Cnn14_DecisionLevelMax (Sound Event Detection): Uses Decision-level pooling to maintain
+  time resolution. Essential for generating Eventograms and high-res CSV logs.
+* Other models: Best for global audio tagging (use the '--audio_tagging' mode).
+
+Performance & Stability:
+* Processing ratio: ~15s audio per 1s CPU time (300 GFLOPs, 4-core, no viz).
+* Platform Gap: works ~1.7x faster in Prooted Debian than in Termux (Eigen BLAS).
+* OOM Safety: Close browsers or restart whole phone if crashes occur in Termux.
+
+Split Suggestion:
+If the file is too long, use FFmpeg to segment it first:
+mkdir split_input_media && cd split_input_media && \
+ffmpeg -i /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg.mp3 -c copy -f segment -segment_time 1200 output_%03d.mp4
+time bash -c 'for file in *; do bash audio_me.sh "$file" --dynamic_eventogram; done'
+
+Tips & Environment Hacks:
+* For 'undefined symbol: torch_library_impl' or 'NotImplementedError':
+  Run: pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+* If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:
+  Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)
+* If you see 'NotImplementedError: sys.platform = android' after an update:
+  Edit: /data/data/com.termux/files/usr/lib/python3.12/site-packages/torchaudio/_internally_replaced_utils.py
+  Change 'if sys.platform == "linux":' to 'if sys.platform == "android":'
+* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions
+
+Dependency Versions:
+Torch: 2.11.0+cpu
+Torchaudio: 2.11.0+cpu
+Torchcodec: 0.12.0+cpu
+
+Using device: cpu
+Using CPU.
+Copied AI analysis guide to: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/auditory_cognition_guide_template.md
+⏲  🗃️  File duration: 8:38:26
+📊  Starting decoupled inference in 3.0m chunks. (RAM Avail: 5050 MB)
+    Native SR: 16000 Hz | Inference SR: 32000 Hz
+    💡 Aesthetic Decoupling: Aggregating 63x into 2500 RAM columns.
+Chunk at 0m finished. (RAM Avail: 2782 MB)
+Chunk at 3m finished. (RAM Avail: 2786 MB)
+Chunk at 6m finished. (RAM Avail: 2775 MB)
+Chunk at 9m finished. (RAM Avail: 2760 MB)
+Chunk at 12m finished. (RAM Avail: 2794 MB)
+Chunk at 15m finished. (RAM Avail: 2641 MB)
+Chunk at 18m finished. (RAM Avail: 2803 MB)
+Chunk at 21m finished. (RAM Avail: 2773 MB)
+Chunk at 24m finished. (RAM Avail: 2636 MB)
+Chunk at 27m finished. (RAM Avail: 2699 MB)
+Chunk at 30m finished. (RAM Avail: 2645 MB)
+Chunk at 33m finished. (RAM Avail: 2616 MB)
+Chunk at 36m finished. (RAM Avail: 2554 MB)
+Chunk at 39m finished. (RAM Avail: 2597 MB)
+Chunk at 42m finished. (RAM Avail: 2486 MB)
+Chunk at 45m finished. (RAM Avail: 2437 MB)
+Chunk at 48m finished. (RAM Avail: 2484 MB)
+Chunk at 51m finished. (RAM Avail: 2383 MB)
+Chunk at 54m finished. (RAM Avail: 2356 MB)
+Chunk at 57m finished. (RAM Avail: 2354 MB)
+Chunk at 60m finished. (RAM Avail: 2408 MB)
+Chunk at 63m finished. (RAM Avail: 2330 MB)
+Chunk at 66m finished. (RAM Avail: 2252 MB)
+Chunk at 69m finished. (RAM Avail: 2308 MB)
+Chunk at 72m finished. (RAM Avail: 2285 MB)
+Chunk at 75m finished. (RAM Avail: 2254 MB)
+Chunk at 78m finished. (RAM Avail: 2307 MB)
+Chunk at 81m finished. (RAM Avail: 2165 MB)
+Chunk at 84m finished. (RAM Avail: 2253 MB)
+Chunk at 87m finished. (RAM Avail: 2195 MB)
+Chunk at 90m finished. (RAM Avail: 2255 MB)
+Chunk at 93m finished. (RAM Avail: 2261 MB)
+Chunk at 96m finished. (RAM Avail: 2115 MB)
+Chunk at 99m finished. (RAM Avail: 2189 MB)
+Chunk at 102m finished. (RAM Avail: 2091 MB)
+Chunk at 105m finished. (RAM Avail: 2233 MB)
+Chunk at 108m finished. (RAM Avail: 2374 MB)
+Chunk at 111m finished. (RAM Avail: 2363 MB)
+Chunk at 114m finished. (RAM Avail: 2467 MB)
+Chunk at 117m finished. (RAM Avail: 2329 MB)
+Chunk at 120m finished. (RAM Avail: 2467 MB)
+Chunk at 123m finished. (RAM Avail: 2459 MB)
+Chunk at 126m finished. (RAM Avail: 2492 MB)
+Chunk at 129m finished. (RAM Avail: 2519 MB)
+Chunk at 132m finished. (RAM Avail: 2583 MB)
+Chunk at 135m finished. (RAM Avail: 2540 MB)
+Chunk at 138m finished. (RAM Avail: 2166 MB)
+Chunk at 141m finished. (RAM Avail: 2175 MB)
+Chunk at 144m finished. (RAM Avail: 2186 MB)
+Chunk at 147m finished. (RAM Avail: 2514 MB)
+Chunk at 150m finished. (RAM Avail: 2170 MB)
+Chunk at 153m finished. (RAM Avail: 2212 MB)
+Chunk at 156m finished. (RAM Avail: 2179 MB)
+Chunk at 159m finished. (RAM Avail: 2161 MB)
+Chunk at 162m finished. (RAM Avail: 2178 MB)
+Chunk at 165m finished. (RAM Avail: 2151 MB)
+Chunk at 168m finished. (RAM Avail: 2226 MB)
+Chunk at 171m finished. (RAM Avail: 2270 MB)
+Chunk at 174m finished. (RAM Avail: 2276 MB)
+Chunk at 177m finished. (RAM Avail: 2193 MB)
+Chunk at 180m finished. (RAM Avail: 2370 MB)
+Chunk at 183m finished. (RAM Avail: 2270 MB)
+Chunk at 186m finished. (RAM Avail: 2388 MB)
+Chunk at 189m finished. (RAM Avail: 2452 MB)
+Chunk at 192m finished. (RAM Avail: 2535 MB)
+Chunk at 195m finished. (RAM Avail: 2441 MB)
+Chunk at 198m finished. (RAM Avail: 2334 MB)
+Chunk at 201m finished. (RAM Avail: 2324 MB)
+Chunk at 204m finished. (RAM Avail: 2259 MB)
+Chunk at 207m finished. (RAM Avail: 2256 MB)
+Chunk at 210m finished. (RAM Avail: 2214 MB)
+Chunk at 213m finished. (RAM Avail: 2344 MB)
+Chunk at 216m finished. (RAM Avail: 2407 MB)
+Chunk at 219m finished. (RAM Avail: 2268 MB)
+Chunk at 222m finished. (RAM Avail: 2331 MB)
+Chunk at 225m finished. (RAM Avail: 2207 MB)
+Chunk at 228m finished. (RAM Avail: 2229 MB)
+Chunk at 231m finished. (RAM Avail: 2246 MB)
+Chunk at 234m finished. (RAM Avail: 2333 MB)
+Chunk at 237m finished. (RAM Avail: 2206 MB)
+Chunk at 240m finished. (RAM Avail: 2311 MB)
+Chunk at 243m finished. (RAM Avail: 2426 MB)
+Chunk at 246m finished. (RAM Avail: 2403 MB)
+Chunk at 249m finished. (RAM Avail: 2167 MB)
+Chunk at 252m finished. (RAM Avail: 2308 MB)
+Chunk at 255m finished. (RAM Avail: 2129 MB)
+Chunk at 258m finished. (RAM Avail: 2050 MB)
+Chunk at 261m finished. (RAM Avail: 2163 MB)
+Chunk at 264m finished. (RAM Avail: 2180 MB)
+Chunk at 267m finished. (RAM Avail: 2174 MB)
+Chunk at 270m finished. (RAM Avail: 2179 MB)
+Chunk at 273m finished. (RAM Avail: 2305 MB)
+Chunk at 276m finished. (RAM Avail: 2235 MB)
+Chunk at 279m finished. (RAM Avail: 2225 MB)
+Chunk at 282m finished. (RAM Avail: 2160 MB)
+Chunk at 285m finished. (RAM Avail: 2179 MB)
+Chunk at 288m finished. (RAM Avail: 2179 MB)
+Chunk at 291m finished. (RAM Avail: 2171 MB)
+Chunk at 294m finished. (RAM Avail: 2126 MB)
+Chunk at 297m finished. (RAM Avail: 2166 MB)
+Chunk at 300m finished. (RAM Avail: 2098 MB)
+Chunk at 303m finished. (RAM Avail: 2300 MB)
+Chunk at 306m finished. (RAM Avail: 2260 MB)
+Chunk at 309m finished. (RAM Avail: 2404 MB)
+Chunk at 312m finished. (RAM Avail: 2383 MB)
+Chunk at 315m finished. (RAM Avail: 2392 MB)
+Chunk at 318m finished. (RAM Avail: 2426 MB)
+Chunk at 321m finished. (RAM Avail: 2522 MB)
+Chunk at 324m finished. (RAM Avail: 2131 MB)
+Chunk at 327m finished. (RAM Avail: 2406 MB)
+Chunk at 330m finished. (RAM Avail: 2142 MB)
+Chunk at 333m finished. (RAM Avail: 2402 MB)
+Chunk at 336m finished. (RAM Avail: 2519 MB)
+Chunk at 339m finished. (RAM Avail: 2563 MB)
+Chunk at 342m finished. (RAM Avail: 2174 MB)
+Chunk at 345m finished. (RAM Avail: 2580 MB)
+Chunk at 348m finished. (RAM Avail: 2498 MB)
+Chunk at 351m finished. (RAM Avail: 2154 MB)
+Chunk at 354m finished. (RAM Avail: 2087 MB)
+Chunk at 357m finished. (RAM Avail: 2502 MB)
+Chunk at 360m finished. (RAM Avail: 2510 MB)
+Chunk at 363m finished. (RAM Avail: 2122 MB)
+Chunk at 366m finished. (RAM Avail: 2180 MB)
+Chunk at 369m finished. (RAM Avail: 2230 MB)
+Chunk at 372m finished. (RAM Avail: 2209 MB)
+Chunk at 375m finished. (RAM Avail: 2260 MB)
+Chunk at 378m finished. (RAM Avail: 2310 MB)
+Chunk at 381m finished. (RAM Avail: 2328 MB)
+Chunk at 384m finished. (RAM Avail: 2108 MB)
+Chunk at 387m finished. (RAM Avail: 2116 MB)
+Chunk at 390m finished. (RAM Avail: 2506 MB)
+Chunk at 393m finished. (RAM Avail: 2477 MB)
+Chunk at 396m finished. (RAM Avail: 2501 MB)
+Chunk at 399m finished. (RAM Avail: 2607 MB)
+Chunk at 402m finished. (RAM Avail: 2130 MB)
+Chunk at 405m finished. (RAM Avail: 2481 MB)
+Chunk at 408m finished. (RAM Avail: 2441 MB)
+Chunk at 411m finished. (RAM Avail: 2599 MB)
+Chunk at 414m finished. (RAM Avail: 2643 MB)
+Chunk at 417m finished. (RAM Avail: 2608 MB)
+Chunk at 420m finished. (RAM Avail: 2593 MB)
+Chunk at 423m finished. (RAM Avail: 2691 MB)
+Chunk at 426m finished. (RAM Avail: 2678 MB)
+Chunk at 429m finished. (RAM Avail: 2166 MB)
+Chunk at 432m finished. (RAM Avail: 2682 MB)
+Chunk at 435m finished. (RAM Avail: 2707 MB)
+Chunk at 438m finished. (RAM Avail: 2666 MB)
+Chunk at 441m finished. (RAM Avail: 2223 MB)
+Chunk at 444m finished. (RAM Avail: 2236 MB)
+Chunk at 447m finished. (RAM Avail: 2179 MB)
+Chunk at 450m finished. (RAM Avail: 2181 MB)
+Chunk at 453m finished. (RAM Avail: 2155 MB)
+Chunk at 456m finished. (RAM Avail: 2037 MB)
+Chunk at 459m finished. (RAM Avail: 2221 MB)
+Chunk at 462m finished. (RAM Avail: 2160 MB)
+Chunk at 465m finished. (RAM Avail: 2238 MB)
+Chunk at 468m finished. (RAM Avail: 2277 MB)
+Chunk at 471m finished. (RAM Avail: 2310 MB)
+Chunk at 474m finished. (RAM Avail: 2236 MB)
+Chunk at 477m finished. (RAM Avail: 2353 MB)
+Chunk at 480m finished. (RAM Avail: 2241 MB)
+Chunk at 483m finished. (RAM Avail: 2202 MB)
+Chunk at 486m finished. (RAM Avail: 2155 MB)
+Chunk at 489m finished. (RAM Avail: 2207 MB)
+Chunk at 492m finished. (RAM Avail: 2306 MB)
+Chunk at 495m finished. (RAM Avail: 2332 MB)
+Chunk at 498m finished. (RAM Avail: 2285 MB)
+Chunk at 501m finished. (RAM Avail: 2147 MB)
+Chunk at 504m finished. (RAM Avail: 2386 MB)
+Chunk at 507m finished. (RAM Avail: 2458 MB)
+Chunk at 510m finished. (RAM Avail: 2535 MB)
+Chunk at 513m finished. (RAM Avail: 2519 MB)
+Chunk at 516m finished. (RAM Avail: 2566 MB)
+Aggregation complete. Internal Viz resolution: 0.0794 Hz (Data Frames)
+Final analysis duration: 32659.20s
+Saved eventogram PNG to: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/eventogram.png
+📊  Generating AI-friendly event summary files…
+Saved summary events CSV to: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/summary_events.csv
+📊  Generating detailed AI-friendly event delta JSON (RLE optimized)…
+Saved AI-friendly delta JSON to: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/detailed_events_delta_ai_attention_friendly.json
+📊  Generating interactive Plotly dashboard…
+Saved interactive dashboard to: /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/interactive_dashboard.html
+⏲  🗃️  Analysis finished. Input duration: 32659.20s
+
+	Command being timed: "python /home/zezen/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py --model_type=Cnn14_DecisionLevelMax --checkpoint_path=/media/zezen/HP_P7_Data/Temp/AI_models/audioset_tagging_cnn/Cnn14_DecisionLevelMax_mAP=0.385.pth --cuda /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg.mp3"
+	User time (seconds): 6882.00
+	System time (seconds): 165.42
+	Percent of CPU this job got: 192%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:00:55
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 6294048
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 44772
+	Minor (reclaiming a frame) page faults: 93529232
+	Voluntary context switches: 164686
+	Involuntary context switches: 171794
+	Swaps: 0
+	File system inputs: 1794832
+	File system outputs: 72
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+
+📊  Launching Unified Shapash Dashboard...
+Note: This dashboard explains the Top 50 sounds detected.
+Use the GUI dropdown to switch between sound targets.
+2026-06-05 15:48:03 above-hp2-silver numexpr.utils[244202] INFO NumExpr defaulting to 8 threads.
+--- Unified Acoustic Brain Dashboard v1.0.9 ---
+Loading /media/zezen/HP_P7_Data/Videos/Watch_me/Test/2026-06-02 11.47.10.ogg_Cnn14_DecisionLevelMax_mAP=0.385.pth_audioset_tagging_cnn/full_event_log.h5...
+Unified Ingestion: 527 active sound features.
+Narrative Selection: Explaining the Top 50 sounds in the GUI.
+Training Unified Acoustic Model (Forest depth=5, Estimators=10)...
+Calculating SHAP contributions (sampling 200 points)...
+Masking identity correlations...
+
+Compiling Unified SmartExplainer...
+
+--- PERFORMANCE REPORT (Brain Generation) ---
+Duration: 136.27 seconds
+Memory Delta: 551.61 MB
+Peak Memory (RSS): 1360.87 MB
+----------------------------------------------
+
+
+--------------------------------------------------
+DASHBOARD STARTING (Unified Acoustic Brain)
+URL: http://localhost:8050
+GUI: Select sound targets from the dropdown.
+--------------------------------------------------
+Dash is running on http://0.0.0.0:8050/
+
+2026-06-05 15:50:34 above-hp2-silver dash.dash[244202] INFO Dash is running on http://0.0.0.0:8050/
+
