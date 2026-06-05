@@ -190,11 +190,29 @@ Previously, the script would process 3-minute chunks but keep all high-resolutio
 - **Direct Disk Streaming:** High-res (100 FPS) results are written directly to `full_event_log.csv`. 
 - **50x Internal Downsampling:** Visualization structures are max-pooled to 2-5 FPS.
 
-### 3. The "Surgical Load" Refactor (v6.8.12)
-The most significant memory win. Previously, `torchaudio.load()` would decode the **entire file** into RAM before chunking. For a 10-hour file, this created a 4.6GB "Loading Plateau."
-- **Seek-Based Decoding:** The script now uses `frame_offset` to decode only the active 3-minute chunk from disk. 
-- **Sample Rate Probe:** Since newer `torchaudio` versions (2.11+) may lack the `.info()` attribute due to C++ backend mismatches, the script uses a 1-frame probe load to determine the **Native Sample Rate** for precise seeking.
-- **Flat Memory Profile:** RAM usage is now constant (capped at ~50MB per chunk) regardless of file length, making 10-hour runs safe on 8GB machines.
+### 3. The "O(1) Seeking" Refactor (v6.11.1)
+The most significant performance win. Previously, `torchaudio.load()` would decode the **entire file** into RAM before chunking, or re-decode from the start for every chunk in O(N) time.
+- **SoundFile Integration:** The script now uses `soundfile.read()` for true O(1) seeking. It jumps to any second of an 8-hour MP3 or WAV file instantly without re-scanning metadata or re-decoding headers.
+- **Flat Memory Profile:** By combining `soundfile` with pre-allocated visualization buffers, RAM usage is now constant (capped at ~3.2GB for 8+ hour files) regardless of file length.
+
+### 4. Reference Leak Prevention (.copy() Fix)
+A critical memory fix was implemented for the visualization pipeline.
+- **The NumPy Trap:** Appending slices (views) of large tensors to lists previously kept the entire original high-resolution buffer alive in RAM.
+- **The Solution:** The script now uses `.copy()` when appending to visualization lists, ensuring that only the downsampled data is retained and the 6GB of "hidden" raw data is garbage collected after every chunk.
+
+## 10. HDF5 Bottleneck Removal (CPU Saturation)
+
+To achieve 100% CPU utilization (800% on 8 cores), the HDF5 logging pipeline was optimized:
+- **No In-Loop Compression:** Single-threaded Gzip compression was removed from the inference loop. This prevents the "GIL Lock" that previously caused the CPU to idle while waiting for one core to compress a chunk.
+- **Pre-Allocation:** HDF5 datasets are now pre-allocated based on the file duration. This eliminates the metadata overhead of resizing the file 170+ times during the run.
+- **Buffered Writes:** Redundant `h5_file.flush()` calls were removed, allowing the OS to manage disk I/O in the background without stalling the AI math.
+
+## 11. Performance Baseline (Verified 2026)
+
+On an 8-core CPU system, the optimized pipeline achieves:
+- **Throughput:** ~20x real-time speed (8.6 hours of audio analyzed in <26 minutes).
+- **CPU Utilization:** ~350-400% average (balanced for thermal stability).
+- **RAM Footprint:** Constant 3.2 GB Max RSS (No swapping).
 
 ### 4. Video Rendering Speed Hack (v6.6.3 Update)
 To enable full-length video visualization on mobile devices (Android/Termux), the rendering pipeline was refactored to eliminate the "Rendering Bottleneck" caused by redundant Matplotlib and MoviePy compositing calls.

@@ -478,12 +478,12 @@ def sound_event_detection(args):
         h5_dataset = h5_file.create_dataset('framewise_output', 
                                             shape=(total_rows_est, len(labels)), 
                                             maxshape=(None, len(labels)), 
-                                            dtype='float32')
+                                            dtype='float32', compression='gzip')
         h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
         h5_timestamps = h5_file.create_dataset('timestamps', 
                                                shape=(total_rows_est,), 
                                                maxshape=(None,), 
-                                               dtype='float32')
+                                               dtype='float32', compression='gzip')
 
         current_row = 0
         for start_frame in range(0, native_num_frames, native_chunk_samples):
