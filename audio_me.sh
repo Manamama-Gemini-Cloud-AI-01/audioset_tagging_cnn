@@ -84,25 +84,31 @@ INPUT_DIR=$(dirname "$INPUT_FILE")
 
 # Reconstruct the output directory path (must match Python logic)
 OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
-CSV_PATH="${OUTPUT_DIR}/full_event_log.csv"
+H5_PATH="${OUTPUT_DIR}/full_event_log.h5"
 
-if [[ -f "$CSV_PATH" ]]; then
+# Check if --no-shapash is in the arguments
+SKIP_SHAPASH=false
+for arg in "$@"; do
+    if [[ "$arg" == "--no-shapash" ]]; then
+        SKIP_SHAPASH=true
+        break
+    fi
+done
+
+if [[ "$SKIP_SHAPASH" == true ]]; then
+    echo
+    echo "⏭️  Skipping Shapash dashboard launch (--no-shapash specified)."
+elif [[ -f "$H5_PATH" ]]; then
     echo
     echo "📊  Launching Unified Shapash Dashboard..."
     echo "Note: This dashboard explains the Top 50 sounds detected."
     echo "Use the GUI dropdown to switch between sound targets."
     # Speed Hack: Uses 'Tiny Forest' (10 estimators) and 'Strategic Sampling' (200 points) 
     # to maintain sub-10s 'Brain' generation on mobile devices.
-    python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_multi_target_dashboard.py" "$CSV_PATH"
-
-    # LEGACY: Single-target dashboard
-    # echo "📊  Launching Shapash Correlations Dashboard..."
-    # echo "Note: The dashboard explains ONE specific sound class (the target)."
-    # echo "Each .pkl file is a targeted 'Acoustic Brain', not a universal model for all classes."
-    # python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_correlations_dashboard.py" "$CSV_PATH"
+    python "$HOME/Downloads/GitHub/audioset_tagging_cnn/scripts/Shapash_visualization/launch_multi_target_dashboard.py" "$H5_PATH"
 else
     echo
-    echo "⚠️  Warning: full_event_log.csv not found at $CSV_PATH. Skipping dashboard."
+    echo "⚠️  Warning: full_event_log.h5 not found at $H5_PATH. Skipping dashboard."
 fi
 
 

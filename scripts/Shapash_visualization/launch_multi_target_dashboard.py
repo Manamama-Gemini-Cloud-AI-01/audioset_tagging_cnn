@@ -25,11 +25,39 @@ class MultiOutputPredictProba:
     def __call__(self, x):
         return self.model.predict(x)
 
+import pandas as pd
+import numpy as np
+import h5py
+from sklearn.ensemble import RandomForestRegressor
+from shapash import SmartExplainer
+import shap
+import os
+import argparse
+import joblib
+from tqdm import tqdm
+import warnings
+import time
+import psutil
+
+# --- VERSIONING ---
+VERSION = "1.0.9"
+# ------------------
+
+# Suppress warnings for cleaner CLI output
+warnings.filterwarnings("ignore")
+
+# Define a top-level function for monkeypatching to ensure picklability
+class MultiOutputPredictProba:
+    def __init__(self, model):
+        self.model = model
+    def __call__(self, x):
+        return self.model.predict(x)
+
 def main():
     print(f"--- Unified Acoustic Brain Dashboard v{VERSION} ---")
     
     parser = argparse.ArgumentParser(description="Unified Acoustic Brain Dashboard")
-    parser.add_argument("csv_path", help="Path to the full_event_log.csv file")
+    parser.add_argument("h5_path", help="Path to the full_event_log.h5 file")
     parser.add_argument("--top_n", type=int, help="Number of sound targets to explain (dropdown size)", default=50)
     parser.add_argument("--samples", type=int, help="Number of samples for SHAP calculation", default=200)
     parser.add_argument("--estimators", type=int, help="Number of trees in Random Forest", default=10)
@@ -37,79 +65,68 @@ def main():
     
     args = parser.parse_args()
 
-    if not os.path.exists(args.csv_path):
-        print(f"Error: File not found: {args.csv_path}")
+    if not os.path.exists(args.h5_path):
+        print(f"Error: File not found: {args.h5_path}")
         return
 
-    source_dir = os.path.dirname(os.path.abspath(args.csv_path))
-    # brain_path = os.path.join(source_dir, "shapash_unified_acoustic_brain.pkl")
+    print(f"Loading {args.h5_path}...")
+    try:
+        with h5py.File(args.h5_path, 'r') as hf:
+            data = hf['framewise_output'][:]
+            labels = [l.decode('utf-8') for l in hf['labels'][:]]
+            # timestamps are not used in this specific dashboard script
+            df = pd.DataFrame(data, columns=labels)
+    except Exception as e:
+        print(f"Error reading HDF5: {e}")
+        return
+
+    # --- START PERFORMANCE MEASUREMENT ---
+    start_time = time.perf_counter()
+    process = psutil.Process(os.getpid())
+    mem_before = process.memory_info().rss / (1024 * 1024)
+
+    # 1. Prepare Data - "One CSV, One Model"
+    sounds_df = df
     
-    xpl = None
-    # Persistence Disabled: Compilation is fast enough (~8s) to avoid 180MB storage overhead
-    '''
-    if os.path.exists(brain_path) and not args.force:
-        print(f"Found existing unified brain at {brain_path}. Loading...")
-        try:
-            xpl = joblib.load(brain_path)
-            # Restore monkeypatching if it was lost during pickling
-            if not hasattr(xpl.model, "predict_proba"):
-                print("Restoring predict_proba monkeypatch...")
-                xpl.model.predict_proba = MultiOutputPredictProba(xpl.model)
-        except Exception as e:
-            print(f"Warning: Could not load existing brain: {e}. Retraining...")
-    '''
+    # Filter out absolute silence (classes never detected)
+    active_mask = (sounds_df != 0).any(axis=0)
+    X = sounds_df.loc[:, active_mask]
+    
+    # Unified Ingestion: Use all sounds as features
+    # Narrative Selection: Select Top N for the GUI dropdown
+    all_active_names = X.columns.tolist()
+    top_sounds = X.mean().sort_values(ascending=False).head(args.top_n)
+    target_names = top_sounds.index.tolist()
+    
+    print(f"Unified Ingestion: {len(all_active_names)} active sound features.")
+    print(f"Narrative Selection: Explaining the Top {len(target_names)} sounds in the GUI.")
 
-    if xpl is None:
-        print(f"Loading {args.csv_path}...")
-        df = pd.read_csv(args.csv_path)
-        
-        # --- START PERFORMANCE MEASUREMENT ---
-        start_time = time.perf_counter()
-        process = psutil.Process(os.getpid())
-        mem_before = process.memory_info().rss / (1024 * 1024)
+    # Create mapping for numeric labels (Shapash requirement)
+    name_to_id = {name: i for i, name in enumerate(target_names)}
+    id_to_name = {i: name for i, name in enumerate(target_names)}
 
-        # 1. Prepare Data - "One CSV, One Model"
-        sounds_df = df.drop(columns=["time"]) if "time" in df.columns else df
+    # 2. Train ONE Multi-Output Model
+    Y = X[target_names]
+    print(f"Training Unified Acoustic Model (Forest depth=5, Estimators={args.estimators})...")
+    model = RandomForestRegressor(n_estimators=args.estimators, max_depth=5, random_state=42, n_jobs=-1)
+    model.fit(X, Y)
+    
+    # 3. SHAP Calculation (Strategic Sampling)
+    print(f"Calculating SHAP contributions (sampling {args.samples} points)...")
+    X_sample = X.sample(n=min(len(X), args.samples), random_state=42)
+    explainer = shap.TreeExplainer(model)
+    
+    shap_results = explainer.shap_values(X_sample)
         
-        # Filter out absolute silence (classes never detected)
-        active_mask = (sounds_df != 0).any(axis=0)
-        X = sounds_df.loc[:, active_mask]
-        
-        # Unified Ingestion: Use all sounds as features
-        # Narrative Selection: Select Top N for the GUI dropdown
-        all_active_names = X.columns.tolist()
-        top_sounds = X.mean().sort_values(ascending=False).head(args.top_n)
-        target_names = top_sounds.index.tolist()
-        
-        print(f"Unified Ingestion: {len(all_active_names)} active sound features.")
-        print(f"Narrative Selection: Explaining the Top {len(target_names)} sounds in the GUI.")
-
-        # Create mapping for numeric labels (Shapash requirement)
-        name_to_id = {name: i for i, name in enumerate(target_names)}
-        id_to_name = {i: name for i, name in enumerate(target_names)}
-
-        # 2. Train ONE Multi-Output Model
-        Y = X[target_names]
-        print(f"Training Unified Acoustic Model (Forest depth=5, Estimators={args.estimators})...")
-        model = RandomForestRegressor(n_estimators=args.estimators, max_depth=5, random_state=42, n_jobs=-1)
-        model.fit(X, Y)
-        
-        # 3. SHAP Calculation (Strategic Sampling)
-        print(f"Calculating SHAP contributions (sampling {args.samples} points)...")
-        X_sample = X.sample(n=min(len(X), args.samples), random_state=42)
-        explainer = shap.TreeExplainer(model)
-        
-        shap_results = explainer.shap_values(X_sample)
-        
-        # 4. Mask Self-Contribution & Format for Shapash
-        print("Masking identity correlations...")
-        list_contrib_df = []
-        
-        if isinstance(shap_results, list):
-            list_contrib_raw = shap_results
-        else:
-            # 3D Array (samples, features, outputs)
-            list_contrib_raw = [shap_results[:, :, i] for i in range(shap_results.shape[2])]
+    # 4. Mask Self-Contribution & Format for Shapash
+    print("Masking identity correlations...")
+    list_contrib_df = []
+    
+    if isinstance(shap_results, list):
+        list_contrib_raw = shap_results
+    else:
+        # 3D Array (samples, features, outputs)
+        list_contrib_raw = [shap_results[:, :, i] for i in range(shap_results.shape[2])]
 
         for i, target in enumerate(target_names):
             contrib_arr = list_contrib_raw[i].copy() # Use copy to avoid modifying original SHAP values

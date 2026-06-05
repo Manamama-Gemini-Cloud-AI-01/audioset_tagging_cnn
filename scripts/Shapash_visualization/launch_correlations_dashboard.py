@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import h5py
 from sklearn.ensemble import RandomForestRegressor
 from shapash import SmartExplainer
 import os
@@ -8,7 +9,7 @@ import argparse
 def main():
     # 1. Setup Command Line Arguments
     parser = argparse.ArgumentParser(description="Terminal-only Shapash Acoustic Explainer")
-    parser.add_argument("csv_path", help="Path to the full_event_log.csv file")
+    parser.add_argument("h5_path", help="Path to the full_event_log.h5 file")
     parser.add_argument("--target", help="Specific sound class to explain (default: the top sound detected)", default=None)
     parser.add_argument("--estimators", type=int, help="Number of trees in Random Forest", default=20)
     parser.add_argument("--samples", type=int, help="Number of background samples to include", default=200)
@@ -16,20 +17,22 @@ def main():
     args = parser.parse_args()
 
     # 2. Load the data
-    if not os.path.exists(args.csv_path):
-        print(f"Error: File not found: {args.csv_path}")
+    if not os.path.exists(args.h5_path):
+        print(f"Error: File not found: {args.h5_path}")
         return
 
-    # Basic extension check to prevent binary file reading errors
-    if not args.csv_path.lower().endswith('.csv'):
-        print(f"Error: This script expects a CSV file (e.g., full_event_log.csv).")
-        return
-
-    print("loading " + args.csv_path)
+    print("loading " + args.h5_path)
     try:
-        df = pd.read_csv(args.csv_path)
+        with h5py.File(args.h5_path, 'r') as hf:
+            data = hf['framewise_output'][:]
+            labels = [l.decode('utf-8') for l in hf['labels'][:]]
+            timestamps = hf['timestamps'][:]
+            
+            # Create DataFrame
+            df = pd.DataFrame(data, columns=labels)
+            df['time'] = timestamps
     except Exception as e:
-        print(f"Error reading CSV: {e}")
+        print(f"Error reading HDF5: {e}")
         return
 
     # 3. Target Selection
