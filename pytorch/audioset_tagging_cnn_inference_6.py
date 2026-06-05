@@ -451,10 +451,13 @@ def sound_event_detection(args):
     effective_viz_fps = viz_fps / vis_agg_factor
     vis_downsample = max(1, int(inference_fps / effective_viz_fps))
 
-    # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
-    framewise_vis_list = []
+    # Pre-allocate fixed-size buffers for O(1) memory management
+    num_viz_frames = int(duration * effective_viz_fps) + 1
+    framewise_viz_buffer = np.zeros((num_viz_frames, len(labels)), dtype=np.float32)
+    current_viz_row = 0
     stft_vis_list = []
-    
+
+    # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
@@ -523,7 +526,8 @@ def sound_event_detection(args):
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
                 if len(vis_slice) > 0:
-                    framewise_vis_list.append(np.max(vis_slice, axis=0))
+                    framewise_viz_buffer[current_viz_row] = np.max(vis_slice, axis=0)
+                    current_viz_row += 1
 
             # Step E: STFT for visualization background
             chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
@@ -549,10 +553,11 @@ def sound_event_detection(args):
             torch.cuda.empty_cache()
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
-    if not skip_inference and len(framewise_vis_list) > 0:
-        framewise_output = np.array(framewise_vis_list)
+    if not skip_inference:
+        # Use only the filled portion of the pre-allocated buffer
+        framewise_output = framewise_viz_buffer[:current_viz_row]
         stft = np.concatenate(stft_vis_list, axis=1)
-        del framewise_vis_list, stft_vis_list
+        del framewise_viz_buffer, stft_vis_list
     elif skip_inference:
         # Load data from HDF5 if inference was skipped
         with h5py.File(h5_path, 'r') as hf:
