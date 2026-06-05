@@ -52,13 +52,11 @@ import datetime
 import time
 import subprocess
 import shutil
-import moviepy
 import warnings
 import soundfile as sf
 import psutil
 #import coverage 
 
-from moviepy import AudioFileClip, VideoClip
 import json
 import collections
 import plotly.offline as pyo
@@ -843,27 +841,55 @@ def sound_event_detection(args):
             frame_cache.update({"last_i": i, "last_img": img})
             return img
 
-        # Final Compositing & Export (Optimized for Stream Copy)
-        eventogram_clip = VideoClip(make_frame, duration=duration)
-        eventogram_clip.fps = output_fps
+        # --- DYNAMIC DIMENSION PROBE ---
+        # Claude's Fix: Since 'bbox_inches=tight' changes the PNG size, we probe the 
+        # first frame to get the 'Visual Truth' before opening the pipe.
+        first_frame = make_frame(0)
+        v_h, v_w, _ = first_frame.shape
         
-        # 1. Render Silent Video to avoid MoviePy's inefficient re-encoding
-        temp_v = os.path.join(output_dir, "temp_silent_eventogram.mp4")
-        print("🎬  Rendering silent eventogram video frames...")
-        eventogram_clip.write_videofile(
-            temp_v, codec="libx264", audio=False, fps=output_fps, 
-            threads=os.cpu_count(), logger=None
-        )
-
-        # 2. Mux Original Audio (Stream Copy) to preserve source parameters
-        print("🎵  Muxing original audio stream (copy mode) to final video...")
-        subprocess.run([
-            "ffmpeg", "-y", "-i", temp_v, "-i", inference_media,
-            "-c:v", "copy", "-c:a", "copy", "-map", "0:v:0", "-map", "1:a:0",
+        # Ensure even dimensions for yuv420p compatibility (FFmpeg requirement)
+        v_w, v_h = v_w // 2 * 2, v_h // 2 * 2
+        
+        # Final Compositing & Export (Direct FFmpeg Pipe - Zero Temp Files)
+        total_output_frames = int(duration * output_fps)
+        
+        # FFmpeg setup: Pipe 0 is raw video frames; Input 1 is the original audio
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{v_w}x{v_h}",
+            "-pix_fmt", "rgb24", "-r", str(output_fps),
+            "-i", "pipe:0",          # Raw frames from Python
+            "-i", inference_media,   # Audio from source
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "copy",          # 1:1 Audio Stream Copy
+            "-map", "0:v:0", "-map", "1:a:0",
             "-shortest", output_video_path, "-loglevel", "warning"
-        ], check=True)
+        ]
         
-        if os.path.exists(temp_v): os.remove(temp_v)
+        print(f"🎬  Encoding video via direct pipe ({v_w}x{v_h}, {total_output_frames} frames)...")
+        ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+        try:
+            for frame_idx in range(total_output_frames):
+                t = frame_idx / output_fps
+                frame = make_frame(t)
+                
+                # Surgical Crop: Ensure buffer matches the 'even' dimensions promised to FFmpeg
+                if frame.shape[0] > v_h or frame.shape[1] > v_w:
+                    frame = frame[:v_h, :v_w, :]
+                
+                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
+                
+                if frame_idx % (output_fps * 10) == 0:
+                    percent = (frame_idx / total_output_frames) * 100
+                    print(f"   Progress: {percent:.1f}% ({t:.0f}s / {duration:.0f}s)", end="\r")
+            
+            print(f"   Progress: 100.0% ({duration:.0f}s / {duration:.0f}s)")
+        finally:
+            ffmpeg_proc.stdin.close()
+            ffmpeg_proc.wait()
+
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
 
@@ -966,11 +992,13 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.9.2") 
+    print(f"Eventogrammer, version 6.10.1") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
     print(f"Recent Material Changes:")
+    print(f"* We completely removed moviepy: ffmpeg shall do it. Needs much testing.")
+ 
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files). Moviepy renders silent audio and we ffmpeg it back adding original audio to avoid no disk space crashes.")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
@@ -1006,7 +1034,6 @@ if __name__ == '__main__':
     print()
 
     print(f"Dependency Versions:")
-    print(f"MoviePy: {moviepy.__version__}")
     print(f"Torch: {torch.__version__ if torch else 'Not Available'}")
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
     # May need to be disabled as it errors if installed some weird version 0 dev.
