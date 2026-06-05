@@ -843,17 +843,27 @@ def sound_event_detection(args):
             frame_cache.update({"last_i": i, "last_img": img})
             return img
 
-        # Final Compositing & Export
+        # Final Compositing & Export (Optimized for Stream Copy)
         eventogram_clip = VideoClip(make_frame, duration=duration)
-        audio_clip = AudioFileClip(inference_media)
-        final_clip = eventogram_clip.with_audio(audio_clip)
-        final_clip.fps = output_fps
+        eventogram_clip.fps = output_fps
         
-        final_clip.write_videofile(
-            output_video_path, codec="libx264", fps=output_fps, 
-            threads=os.cpu_count(),
-            temp_audiofile=os.path.join(output_dir, "temp_render_audio.mp3")
+        # 1. Render Silent Video to avoid MoviePy's inefficient re-encoding
+        temp_v = os.path.join(output_dir, "temp_silent_eventogram.mp4")
+        print("🎬  Rendering silent eventogram video frames...")
+        eventogram_clip.write_videofile(
+            temp_v, codec="libx264", audio=False, fps=output_fps, 
+            threads=os.cpu_count(), logger=None
         )
+
+        # 2. Mux Original Audio (Stream Copy) to preserve source parameters
+        print("🎵  Muxing original audio stream (copy mode) to final video...")
+        subprocess.run([
+            "ffmpeg", "-y", "-i", temp_v, "-i", inference_media,
+            "-c:v", "copy", "-c:a", "copy", "-map", "0:v:0", "-map", "1:a:0",
+            "-shortest", output_video_path, "-loglevel", "warning"
+        ], check=True)
+        
+        if os.path.exists(temp_v): os.remove(temp_v)
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
 
@@ -878,7 +888,7 @@ def sound_event_detection(args):
                     "[main][ovr_t]overlay=x=0:y=H-h[v]" # Stack them at the bottom
                 ),
                 "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-shortest"
+                "-c:a", "copy", "-shortest"
             ]
             if args.bitrate: overlay_cmd.extend(["-b:v", args.bitrate])
             else: overlay_cmd.extend(["-crf", str(args.crf)])
@@ -956,12 +966,12 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.9.1") 
+    print(f"Eventogrammer, version 6.9.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
     print(f"Recent Material Changes:")
-    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
+    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files). Moviepy renders silent audio and we ffmpeg it back adding original audio to avoid no disk space crashes.")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
 
