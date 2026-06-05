@@ -812,7 +812,8 @@ def sound_event_detection(args):
                     ax.set_xlim(t_start, t_end); line.set_xdata([t_curr, t_curr])
                 
                 fig_fr.canvas.draw()
-                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
+                c_w, c_h = fig_fr.canvas.get_width_height()
+                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((c_h, c_w, 4))[:,:,:3]
 
         else: # Static Eventogram (Just a moving red line over the PNG)
             output_video_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_static.mp4')
