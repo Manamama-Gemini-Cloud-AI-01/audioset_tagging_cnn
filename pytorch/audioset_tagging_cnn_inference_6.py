@@ -1085,7 +1085,7 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.11.1") 
+    print(f"Eventogrammer, version 6.11.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
@@ -1125,6 +1125,9 @@ if __name__ == '__main__':
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
     print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions")
+    
+    print("* If: 'LibsndfileError: File contains data in an unimplemented format', thenL  'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
+
     print()
 
     print(f"Dependency Versions:")
