@@ -25,11 +25,22 @@ import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-#Torch and torchaudio and coverage are version sensitive. Careful with: python -m pip install torch torchaudio--upgrade --extra-index-url https://download.pytorch.org/whl/cpu
+#Torch and torchaudio and coverage are version sensitive.  Use apt for that if you can or just remove coverage.
 
 import torch
-import torchaudio
-import torchcodec
+# Handle version-sensitive imports: Torchaudio is essential for tensor-land processing and CUDA efficiency.
+try:
+    import torchaudio
+except (OSError, ImportError) as e:
+    print(f"\033[1;31mERROR: torchaudio and torch are not compatible ({e}). We stop.\033[0m")
+    print("Please synchronize your versions to fix the 'undefined symbol' or import error:")
+    print("\033[1;32mpip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu\033[0m")
+    sys.exit(1)
+
+try:
+    import torchcodec
+except (OSError, ImportError, RuntimeError):
+    torchcodec = None
 # AI ARCHITECTURAL NOTE: torchaudio is essential for:
 # 1. High-level Decoding/Normalization/Resampling to 32kHz (fixed model rate).
 # 2. GPU/CUDA efficiency on large files.
@@ -41,18 +52,15 @@ import datetime
 import time
 import subprocess
 import shutil
-import moviepy
 import warnings
-import platform
 import soundfile as sf
 import psutil
 #import coverage 
 
-from moviepy import ImageClip, CompositeVideoClip, AudioFileClip, ColorClip, VideoClip
+import h5py
 import json
 import collections
 import plotly.offline as pyo
-from scipy.stats import entropy
 import tempfile # Import tempfile for temporary file handling
 
 # Suppress torchaudio deprecation warnings
@@ -69,24 +77,10 @@ import config
 
 
 
-def is_video_file(audio_path):
-    try:
-        result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_streams', '-print_format', 'json', audio_path],
-            capture_output=True, text=True, check=True
-        )
-        streams = json.loads(result.stdout).get('streams', [])
-        return any(stream['codec_type'] == 'video' and stream.get('codec_name') not in ['mjpeg', 'png'] for stream in streams)
-    except subprocess.CalledProcessError:
-        return False
-    except Exception:
-        return False
-
-
-def get_duration_and_fps(input_media_path):
+def get_media_metadata(input_media_path):
     """
-    Extract duration, FPS, and resolution from a media file using FFprobe.
-    Handles audio-only and video files universally, prioritizing format duration.
+    Extract duration, FPS, resolution, is_video flag, and native sample rate from a media file using FFprobe.
+    Returns: (duration, avg_fps, width, height, is_video, r_fps, native_sr)
     """
     try:
         # Run ffprobe to get format and stream info
@@ -94,7 +88,6 @@ def get_duration_and_fps(input_media_path):
             ['ffprobe', '-v', 'error', '-show_format', '-show_streams', '-print_format', 'json', input_media_path],
             capture_output=True, text=True
         )
-        # Check if ffprobe returned valid JSON output
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError as e:
@@ -104,11 +97,8 @@ def get_duration_and_fps(input_media_path):
         streams = data.get('streams', [])
         format_info = data.get('format', {})
         
-        # Initialize outputs
-        duration = None
-        fps = None
-        width = None
-        height = None
+        duration, avg_fps, width, height, r_fps, native_sr = None, None, None, None, None, None
+        is_video = any(s['codec_type'] == 'video' and s.get('codec_name') not in ['mjpeg', 'png'] for s in streams)
 
         # Try format duration first (most reliable)
         if format_info.get('duration'):
@@ -116,6 +106,11 @@ def get_duration_and_fps(input_media_path):
                 duration = float(format_info['duration'])
             except (ValueError, TypeError):
                 print(f"\033[1;33mWarning: Invalid format duration in {input_media_path}\033[0m")
+
+        # Get native sample rate from audio stream
+        audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
+        if audio_stream and audio_stream.get('sample_rate'):
+            native_sr = int(audio_stream['sample_rate'])
 
         # Check video stream for duration, FPS, and resolution
         video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
@@ -126,44 +121,40 @@ def get_duration_and_fps(input_media_path):
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid video stream duration in {input_media_path}\033[0m")
             
-            avg_frame_rate = video_stream.get('avg_frame_rate')
-            if avg_frame_rate and '/' in avg_frame_rate:
+            # Average FPS
+            avg_fr = video_stream.get('avg_frame_rate')
+            if avg_fr and '/' in avg_fr:
                 try:
-                    num, den = map(int, avg_frame_rate.split('/'))
-                    fps = num / den if den else None
-                except (ValueError, TypeError):
-                    print(f"\033[1;33mWarning: Invalid avg_frame_rate in {input_media_path}\033[0m")
+                    num, den = map(int, avg_fr.split('/'))
+                    avg_fps = num / den if den else None
+                except (ValueError, TypeError): pass
+            
+            # Real FPS (for VFR check)
+            r_fr = video_stream.get('r_frame_rate')
+            if r_fr and '/' in r_fr:
+                try:
+                    num, den = map(int, r_fr.split('/'))
+                    r_fps = num / den if den else None
+                except (ValueError, TypeError): pass
             
             width = int(video_stream.get('width', 0)) if video_stream.get('width') else None
             height = int(video_stream.get('height', 0)) if video_stream.get('height') else None
             
-            if duration is None and video_stream.get('nb_frames') and fps:
+            if duration is None and video_stream.get('nb_frames') and avg_fps:
                 try:
-                    duration = int(video_stream['nb_frames']) / fps
+                    duration = int(video_stream['nb_frames']) / avg_fps
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid nb_frames or fps for duration calculation in {input_media_path}\033[0m")
 
-        # Check audio stream for duration (for audio-only files like WebM/Opus)
+        # Check audio stream fallback
         if duration is None:
-            audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
             if audio_stream and audio_stream.get('duration'):
                 try:
                     duration = float(audio_stream['duration'])
                 except (ValueError, TypeError):
                     print(f"\033[1;33mWarning: Invalid audio stream duration in {input_media_path}\033[0m")
-            
-            # Check tags.DURATION for audio stream (e.g., WebM/Opus)
-            if duration is None and audio_stream and audio_stream.get('tags', {}).get('DURATION'):
-                try:
-                    # Parse tags.DURATION (format: "HH:MM:SS.mmmmmmmmm")
-                    duration_str = audio_stream['tags']['DURATION']
-                    h, m, s = duration_str.split(':')
-                    s, ms = s.split('.')
-                    duration = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000000000
-                except (ValueError, TypeError):
-                    print(f"\033[1;33mWarning: Invalid tags.DURATION in {input_media_path}\033[0m")
 
-        # Fallback: Direct ffprobe duration probe
+        # Final Fallback: Direct duration probe
         if duration is None:
             try:
                 result = subprocess.run(
@@ -174,16 +165,19 @@ def get_duration_and_fps(input_media_path):
             except (subprocess.CalledProcessError, ValueError, TypeError) as e:
                 print(f"\033[1;33mWarning: Fallback duration probe failed for {input_media_path}: {e}\033[0m")
 
-        # If duration is still None, exit with error
-        if duration is None:
-            print(f"\033[1;31mError: Could not determine duration for {input_media_path}. Exiting.\033[0m")
-            return None, None, None, None
+        return duration, avg_fps, width, height, is_video, r_fps, native_sr
 
-        # Log results
+    except Exception as e:
+        print(f"Error probing media: {e}")
+        return None, None, None, None, False, None, None
+
+    # --- USER INTERFACE & LOGGING ---
+
+        # --- USER INTERFACE & LOGGING ---
         duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
         print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
-        if fps:
-            print(f"🮲  🗃️  Video FPS (avg): \033[1;34m{fps:.3f}\033[0m")
+        if avg_fps:
+            print(f"🮲  🗃️  Video FPS (avg): \033[1;34m{avg_fps:.3f}\033[0m")
         if width and height:
             print(f"📽  🗃️  Video resolution: \033[1;34m{width}x{height}\033[0m")
             if height > width:
@@ -194,17 +188,14 @@ def get_duration_and_fps(input_media_path):
                 print(f"\033[1;32mffmpeg -i \"{input_media_path}\" -vf \"transpose=1\" \"{os.path.splitext(input_media_path)[0]}_rotated.mp4\"\033[0m\n")
                 print("To do so, break the script now (Ctrl+C) and run the command above.")
                 print("Otherwise, we are proceeding with the portrait video in 2 seconds...")
-                time.sleep(2) # Add a 2-second delay
+                time.sleep(2)
                 print("\033[1;33m------------------------------------------\033[0m\n")
 
-        return duration, fps, width, height
+        return duration, avg_fps, width, height, is_video, r_fps
 
-    except subprocess.CalledProcessError as e:
-        print(f"\033[1;31mError: FFprobe failed for {input_media_path}: {e}\033[0m")
-        return None, None, None, None
     except Exception as e:
-        print(f"\033[1;31mError: Unexpected failure parsing {input_media_path}: {e}\033[0m")
-        return None, None, None, None
+        print(f"\033[1;31mError: Metadata probe failed for {input_media_path}: {e}\033[0m")
+        return None, None, None, None, False, None
 
 def compute_kl_divergence(p, q, eps=1e-10):
     """Compute KL divergence between two probability distributions."""
@@ -289,19 +280,28 @@ def audio_tagging(args):
 def sound_event_detection(args):
     # --- PHASE 0: Setup & Environment ---
     output_fps = args.output_fps
-    vis_fps = args.vis_fps
+    viz_fps = args.vis_fps  # Fixed constant for internal resolution
     adaptive_lookahead = args.adaptive_lookahead
     
     sample_rate = args.sample_rate
     window_size = args.window_size
     hop_size = args.hop_size
+    inference_fps = sample_rate // hop_size # Typically 100
+    
+    top_k = 10  # Number of top events to track/visualize
+    fig_width_px, fig_height_px, dpi = 1280, 480, 100
+    
     mel_bins = args.mel_bins
     fmin = args.fmin
     fmax = args.fmax
     model_type = args.model_type
     checkpoint_path = args.checkpoint_path
-    audio_path = args.audio_path
-    overlay_source_path = audio_path  # Preserve original for final video overlay
+    
+    # Path Consolidation: Clearly define the roles of each media path
+    source_media = args.audio_path    # The original file (never changed)
+    inference_media = source_media   # The file used for duration/audio loading (may be updated to recovered/sanitized)
+    overlay_media = source_media     # The file used for the final video overlay
+    
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
 
     print(f"Using device: {device}")
@@ -313,10 +313,10 @@ def sound_event_detection(args):
     classes_num = config.classes_num
     labels = config.labels
     
-    audio_dir = os.path.dirname(audio_path)
-    base_filename_for_dir = get_filename(audio_path)
+    audio_dir = os.path.dirname(source_media)
+    base_name = get_filename(source_media)
     checkpoint_name = os.path.basename(checkpoint_path)
-    output_dir = os.path.join(audio_dir, f'{base_filename_for_dir}_{checkpoint_name}_audioset_tagging_cnn')
+    output_dir = os.path.join(audio_dir, f'{base_name}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
 
     # --- PHASE 1: Dependency Injection (AI Guide) ---
@@ -333,25 +333,31 @@ def sound_event_detection(args):
     except Exception as e:
         print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
-    base_filename = f'{base_filename_for_dir}_audioset_tagging_cnn'
+    tag_suffix = "_audioset_tagging_cnn"
     fig_path = os.path.join(output_dir, 'eventogram.png')
 
     # --- PHASE 2: Idempotency Check ---
-    csv_path = os.path.join(output_dir, 'full_event_log.csv')
-    is_video = is_video_file(audio_path)
+    h5_path = os.path.join(output_dir, 'full_event_log.h5')
     
-    # Define what files we strictly expect to see before skipping
-    required_files = [csv_path]
+    # Efficiently probe all metadata once
+    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
+    if duration is None: return # Error already printed in probe
+
+    # Define requested video outputs
+    video_outputs = []
     if args.static_eventogram:
-        vid_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
-        required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
-            
+        vid_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_static.mp4')
+        video_outputs.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
     if args.dynamic_eventogram:
-        vid_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
-        required_files.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
-            
-    if all(os.path.exists(f) for f in required_files):
-        print(f"✅ Skipping {audio_path}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
+        vid_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_dynamic.mp4')
+        video_outputs.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
+
+    # Partial Skip Logic: If HDF5 exists, we can skip inference
+    skip_inference = os.path.exists(h5_path)
+    
+    # Full Skip Logic: If CSV AND all requested videos exist
+    if skip_inference and all(os.path.exists(f) for f in video_outputs):
+        print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         return
 
     # Check for sufficient disk space
@@ -360,31 +366,31 @@ def sound_event_detection(args):
         print(f"\033[1;31mError: Insufficient disk space ({disk_usage.free / 1e9:.2f} GB free). Exiting.\033[0m")
         return
     
-    # --- PHASE 3: Model Loading ---
-    Model = eval(model_type)
-    model = Model(sample_rate=sample_rate, window_size=window_size, 
-                  hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
-                  classes_num=classes_num)
-    
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model'])
-    except Exception as e:
-        print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
-        return
+    # --- PHASE 3: Model Loading (Only if inference needed) ---
+    model = None
+    if not skip_inference:
+        Model = eval(model_type)
+        model = Model(sample_rate=sample_rate, window_size=window_size, 
+                      hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
+                      classes_num=classes_num)
+        
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model'])
+        except Exception as e:
+            print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
+            return
 
-    # --- PHASE 4: Media Integrity & Metadata Extraction ---
-    duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
-    
-    # Recovery: Attempt conversion to MP3 if duration detection fails
-    if duration is None or duration == 0:
-        print(f"\033[1;33mWarning: Duration probe failed for {audio_path}. Attempting MP3 recovery...\033[0m")
-        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_filename_for_dir}_recovered.mp3")
+    # --- PHASE 4: Media Integrity & Recovery ---
+    # Recovery: Attempt conversion to MP3 if duration detection returned 0
+    if duration == 0:
+        print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting MP3 recovery...\033[0m")
+        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_name}_recovered.mp3")
 
         try:
-            subprocess.run(['ffmpeg', '-i', audio_path, '-y', mp3_path], check=True, capture_output=True)
-            audio_path = mp3_path # Rest of the script uses this recovered file
-            duration, video_fps, video_width, video_height = get_duration_and_fps(audio_path)
+            subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
+            inference_media = mp3_path # Rest of the script uses this recovered file
+            duration, video_fps, video_width, video_height, is_video, r_fps = get_media_metadata(inference_media)
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
@@ -398,149 +404,194 @@ def sound_event_detection(args):
         print(f"\033[1;33mWarning: Video dimensions not detected, using default 1280x720.\033[0m")
     
     # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
-    video_input_path = audio_path # Variable for the file we actually feed to torchaudio
     temp_video_path = None
-    if is_video:
-        result = subprocess.run(
-            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate,avg_frame_rate', '-of', 'json', audio_path],
-            capture_output=True, text=True, check=True
-        )
-        data = json.loads(result.stdout)
-        if data.get('streams'):
-            stream = data['streams'][0]
-            r_num, r_den = map(int, stream.get('r_frame_rate', '0/1').split('/'))
-            avg_num, avg_den = map(int, stream.get('avg_frame_rate', '0/1').split('/'))
-            r_fps = r_num / r_den if r_den else 0
-            avg_fps = avg_num / avg_den if avg_den else 0
-            
-            if abs(r_fps - avg_fps) > 0.01:
-                print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{avg_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
-                temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_filename_for_dir}.mp4')
-                target_fps = video_fps if video_fps and video_fps > 0 else output_fps
-                # --- FFmpeg Compatibility Note ---
-                # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
-                # Rationale: '-fps_mode' was introduced in FFmpeg 5.1 (late 2022). 
-                # Many stable systems (like Ubuntu 20.04) still use FFmpeg 4.x, which only 
-                # recognizes '-vsync'. While '-vsync' is deprecated in FFmpeg 5.1+, it 
-                # remains a functional alias in FFmpeg 6.x/7.x. 
-                # If a future FFmpeg version (e.g., v10+) removes '-vsync', switch this back 
-                # to: '-fps_mode', 'cfr'
-                subprocess.run([
-                    'ffmpeg', '-loglevel', 'warning', '-i', audio_path, '-r', str(target_fps), '-vsync', '1', '-c:a', 'aac', temp_video_path, '-y'
-                ], check=True)
-                video_input_path = temp_video_path
+    if is_video and r_fps and video_fps:
+        if abs(r_fps - video_fps) > 0.01:
+            print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
+            temp_video_path = os.path.join(output_dir, f'cfr_video_{base_name}.mp4')
+            target_fps = video_fps if video_fps > 0 else output_fps
+            subprocess.run([
+                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-vsync', '1', '-c:a', 'aac', temp_video_path, '-y'
+            ], check=True)
+            inference_media = temp_video_path
 
-    # --- PHASE 6: Waveform Loading (Sanitary Gate) ---
-    try:
-        waveform, sr = torchaudio.load(video_input_path)
-    except Exception as e:
-        print(f"\033[1;33mWarning: Direct torchaudio load failed. Attempting PCM sanitization...\033[0m")
-        sanitized_temp_path = os.path.join(tempfile.gettempdir(), f'sanitized_{base_filename_for_dir}.wav')
+    # --- PHASE 5.5: Surgical WAV Transcode (CPU/Seeking Fix) ---
+    # Rationale: MP3/OGG seeking is O(N). WAV is O(1). 
+    # For files > 10m, the re-decoding overhead stalls the CPU.
+    # Note: Written to output_dir, not system temp.
+    optimized_wav_path = None
+    if duration > 600 and not inference_media.lower().endswith('.wav'):
+        print(f"📦  \033[1;34mOptimizing media for O(1) seeking (WAV transcode)...\033[0m")
+        optimized_wav_path = os.path.join(output_dir, f"{base_name}_seek_optimized.wav")
         try:
-            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', video_input_path, '-vn', '-acodec', 'pcm_s16le', sanitized_temp_path, '-y'], check=True)
-            try:
-                waveform, sr = torchaudio.load(sanitized_temp_path)
-            except:
-                waveform_np, sr = sf.read(sanitized_temp_path)
-                waveform = torch.from_numpy(waveform_np).float().T if waveform_np.ndim > 1 else torch.from_numpy(waveform_np).float().unsqueeze(0)
-            video_input_path = sanitized_temp_path
-        except Exception as generic_err:
-            print(f"\033[1;31mError: Unexpected failure during audio loading: {generic_err}\033[0m")
-            return
+            subprocess.run([
+                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, 
+                '-ac', '1', '-ar', str(sample_rate), optimized_wav_path, '-y'
+            ], check=True)
+            inference_media = optimized_wav_path
+            # Update native_sr to match the new optimized file
+            native_sr = sample_rate
+        except Exception as e:
+            print(f"\033[1;33mWarning: WAV optimization failed, proceeding with slow seeking: {e}\033[0m")
 
-    import gc
-    if sr != sample_rate:
-        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)(waveform)
-        gc.collect()
+    # --- PHASE 6: Metadata Probe (Surgical Load Preparation) ---
+    # Get Native Sample Rate via ffprobe (O(1) memory safety)
+    if not optimized_wav_path:
+        cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate", "-of", "default=noprint_wrappers=1:nokey=1", inference_media]
+        try:
+            native_sr = int(subprocess.check_output(cmd).decode().strip())
+        except Exception:
+            # Fallback if ffprobe fails
+            _, native_sr = torchaudio.load(inference_media, frame_offset=0, num_frames=1)
         
-    waveform = waveform.mean(dim=0, keepdim=True)  # Downmix to mono
-    waveform_np = waveform.squeeze(0).numpy() # Move to NumPy for memory-safe chunking
+    native_num_frames = int(duration * native_sr)
     
-    # CRITICAL: Drop torch tensors to free significant RAM immediately (essential for Termux)
-    del waveform
-    gc.collect()
-    waveform = waveform_np 
-
-    # --- PHASE 7: Chunked Model Inference (Memory-Safe) ---
+    # --- USER INTERFACE & LOGGING ---
+    duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
+    print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
+    
+    # Calculate chunk size in native samples
     chunk_duration = 180  # 3 minutes
-    chunk_samples = int(chunk_duration * sample_rate)
-    frames_per_second = sample_rate // hop_size
-    vis_downsample = frames_per_second // vis_fps
+    native_chunk_samples = int(chunk_duration * native_sr)
+
+    # Aesthetic Decoupling: Cap RAM aggregation arrays to ~2500 columns for O(1) memory
+    max_vis_cols = 2500
+    potential_vis_frames = int(duration * viz_fps)
+    vis_agg_factor = max(1, int(np.ceil(potential_vis_frames / max_vis_cols)))
     
+    # Store the original viz_fps for display, but update viz_fps for internal logic
+    effective_viz_fps = viz_fps / vis_agg_factor
+    vis_downsample = max(1, int(inference_fps / effective_viz_fps))
+
+    # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
     framewise_vis_list = []
     stft_vis_list = []
+    
+    # Optimize CPU usage by using all available cores
+    import multiprocessing
+    torch.set_num_threads(multiprocessing.cpu_count())
+    
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
-    print(f"📊  Starting inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
-    print(f"    Resolution: Disk {frames_per_second} FPS | Visualization {vis_fps} FPS")
-    
-    
-    with open(csv_path, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(['time'] + list(labels))
-        
-        for start in range(0, len(waveform), chunk_samples):
-            chunk = waveform[start:start + chunk_samples]
-            if len(chunk) < sample_rate // 10: continue
-            
-            # Step A: Inference
-            chunk_tensor = move_data_to_device(torch.from_numpy(chunk[None, :]).float(), device)
+    print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
+    print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
+    if vis_agg_factor > 1:
+        print(f"    💡 Aesthetic Decoupling: Aggregating {vis_agg_factor}x into {max_vis_cols} RAM columns.")
+
+    resampler = None
+    if native_sr != sample_rate:
+        resampler = torchaudio.transforms.Resample(orig_freq=native_sr, new_freq=sample_rate).to(device)
+
+    if not skip_inference:
+        # Initialize HDF5 for OOM-safe, memory-efficient logging
+        h5_file = h5py.File(h5_path, 'w')
+        h5_dataset = h5_file.create_dataset('framewise_output', shape=(0, len(labels)), maxshape=(None, len(labels)), dtype='float32', compression='gzip', compression_opts=4)
+        h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
+        h5_file.create_dataset('timestamps', shape=(0,), maxshape=(None,), dtype='float32', compression='gzip', compression_opts=4)
+
+        current_row = 0
+        for start_frame in range(0, native_num_frames, native_chunk_samples):
+            # Surgical Load: Seek directly to chunk
+            chunk_waveform, _ = torchaudio.load(
+                inference_media,
+                frame_offset=start_frame,
+                num_frames=native_chunk_samples
+            )
+
+            if chunk_waveform.shape[1] == 0: break
+
+            # Step A: Pre-processing (Mono + Resample)
+            chunk_waveform = chunk_waveform.mean(dim=0, keepdim=True).to(device)
+            if resampler:
+                chunk_waveform = resampler(chunk_waveform)
+
+            # Step B: Inference
             with torch.no_grad():
                 model.eval()
-                try:
-                    batch_output_dict = model(chunk_tensor, None)
-                    chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
-                except Exception as e:
-                    print(f"\033[1;31mInference error in chunk: {e}\033[0m"); continue
+                batch_output_dict = model(chunk_waveform, None)
+                chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
+
+            # Step C: Write high-res results to disk (OOM-safe, vectorized streaming to HDF5)
+            chunk_start_time = start_frame / native_sr
+            csv_downsample = max(1, inference_fps // args.csv_fps)
+
+            # Select downsampled rows from this chunk
+            downsampled_data = chunk_out[::csv_downsample]
+            num_rows = downsampled_data.shape[0]
+
+            # Pre-calculate timestamps for the downsampled rows
+            downsampled_timestamps = np.array([chunk_start_time + (i / inference_fps) 
+                                               for i in range(0, len(chunk_out), csv_downsample)], dtype='float32')
+
+            # Resize datasets in one go
+            h5_dataset.resize(current_row + num_rows, axis=0)
+            h5_file['timestamps'].resize(current_row + num_rows, axis=0)
+
+            # Vectorized write
+            h5_dataset[current_row : current_row + num_rows] = downsampled_data.astype('float32')
+            h5_file['timestamps'][current_row : current_row + num_rows] = downsampled_timestamps
+
+            current_row += num_rows
             
-            # Step B: Write high-res results to disk immediately (Lean memory)
-            chunk_start_time = start / sample_rate
-            csv_downsample = max(1, frames_per_second // args.csv_fps)
-            for i in range(0, len(chunk_out), csv_downsample):
-                timestamp = chunk_start_time + (i / frames_per_second)
-                writer.writerow([round(timestamp, 3)] + chunk_out[i].tolist())
-            
-            # Step C: Downsample for RAM-based visualization (Max-pooling preserves short events)
+            # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
                 if len(vis_slice) > 0:
-                    framewise_vis_list.append(np.max(vis_slice, axis=0))
+                    # FIX: Use .copy() to release large original buffers from memory
+                    framewise_vis_list.append(np.max(vis_slice, axis=0).copy())
 
-            # Step D: Chunked STFT for visualization background
-            chunk_tensor_stft = torch.from_numpy(chunk).to(device)
+            # Step E: STFT for visualization background
+            chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
+            chunk_tensor_stft = torch.from_numpy(chunk_numpy).to(device)
             chunk_stft = torch.stft(
                 chunk_tensor_stft, n_fft=window_size, hop_length=hop_size,
                 window=torch.hann_window(window_size).to(device),
                 center=True, return_complex=True
             ).abs().cpu().numpy()
-            stft_vis_list.append(chunk_stft[:, ::vis_downsample])
-            
+            # FIX: Use .copy() to release large original buffers from memory
+            stft_vis_list.append(chunk_stft[:, ::vis_downsample].copy())
+
+            # Explicit Memory Cleanup (Crucial for keeping process in RAM)
+            del chunk_waveform, chunk_numpy, chunk_tensor_stft, chunk_stft, chunk_out, batch_output_dict, downsampled_data
+            import gc
+            gc.collect()
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
             
             avail_ram = psutil.virtual_memory().available / (1024 * 1024)
             print(f"Chunk at {int(chunk_start_time/60)}m finished. (RAM Avail: {avail_ram:.0f} MB)")
+            
+        h5_file.close()
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
-    framewise_output = np.array(framewise_vis_list)
-    stft = np.concatenate(stft_vis_list, axis=1)
-    del framewise_vis_list, stft_vis_list
-    
-    # Update frame metadata for downsampled resolution
-    frames_per_second = vis_fps 
-    frames_num = len(framewise_output)
-    
-    # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
-    duration = frames_num / frames_per_second
-    
-    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{frames_per_second} FPS\033[1;0m')
-    print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
+    if not skip_inference and len(framewise_vis_list) > 0:
+        framewise_output = np.array(framewise_vis_list)
+        stft = np.concatenate(stft_vis_list, axis=1)
+        del framewise_vis_list, stft_vis_list
+    elif skip_inference:
+        # Load data from HDF5 if inference was skipped
+        with h5py.File(h5_path, 'r') as hf:
+            framewise_output = hf['framewise_output'][:]
+            stft = np.zeros((1, 1)) # Dummy
+    else:
+        print("Error: Inference returned no data. Check input file or model.")
+        return
 
+    if framewise_output.size == 0:
+        print("Error: No event data detected.")
+        return
+
+    # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
+    frames_num = len(framewise_output)
+    duration = frames_num / effective_viz_fps
+    
+    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{effective_viz_fps:.4f} Hz (Data Frames)\033[1;0m')
+    print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
-    top_k = 10
     top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
     top_labels = np.array(labels)[sorted_indexes[0:top_k]]
 
-    fig_width_px, fig_height_px, dpi = 1280, 480, 100
     fig = plt.figure(figsize=(fig_width_px / dpi, fig_height_px / dpi), dpi=dpi)
     
     # Pass 1: Create dummy plot to measure Y-axis label pixel width (Dynamic Margin)
@@ -562,9 +613,9 @@ def sound_event_detection(args):
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num, frames_per_second * tick_interval)
+    x_ticks = np.arange(0, frames_num, effective_viz_fps * tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels([int(t / frames_per_second) for t in x_ticks], rotation=45, ha='right', fontsize=10)
+    axs[1].xaxis.set_ticklabels([int(t / effective_viz_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num); axs[1].set_yticks(np.arange(0, top_k)); axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
     axs[1].set_xlabel('Seconds', fontsize=14); axs[1].xaxis.set_ticks_position('bottom')
@@ -579,6 +630,11 @@ def sound_event_detection(args):
     print("📊  Generating AI-friendly event summary files…")
     summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     
+    # Load data from HDF5
+    with h5py.File(h5_path, 'r') as hf:
+        framewise_output = hf['framewise_output'][:]
+        timestamps = hf['timestamps'][:]
+        
     # Event detection heuristics
     onset_threshold, offset_threshold = 0.01, 0.01
     min_event_duration_seconds = 0.5 
@@ -590,22 +646,24 @@ def sound_event_detection(args):
     for label_idx, label in enumerate(labels):
         if label not in top_labels: continue
         
-        in_event, event_start_frame = False, 0
-        for frame_index, prob in enumerate(framewise_output[:, label_idx]):
+        in_event, event_start_idx = False, 0
+        for idx, prob in enumerate(framewise_output[:, label_idx]):
             if not in_event and prob > onset_threshold:
-                in_event, event_start_frame = True, frame_index
+                in_event, event_start_idx = True, idx
             elif in_event and prob < offset_threshold:
                 in_event = False
-                duration_frames = frame_index - event_start_frame
-                duration_secs = duration_frames / frames_per_second
+                
+                start_time = timestamps[event_start_idx]
+                end_time = timestamps[idx]
+                duration_secs = end_time - start_time
                 
                 if duration_secs >= min_event_duration_seconds:
-                    event_block_probs = framewise_output[event_start_frame:frame_index, label_idx]
+                    event_block_probs = framewise_output[event_start_idx:idx, label_idx]
                     events_by_class[label].append({
                         'sound_class': label,
-                        'start_time_seconds': round(event_start_frame / frames_per_second, 3),
-                        'end_time_seconds': round(frame_index / frames_per_second, 3),
-                        'duration_seconds': round(duration_secs, 3),
+                        'start_time_seconds': round(float(start_time), 3),
+                        'end_time_seconds': round(float(end_time), 3),
+                        'duration_seconds': round(float(duration_secs), 3),
                         'peak_probability': float(np.max(event_block_probs)),
                         'average_probability': float(np.mean(event_block_probs))
                     })
@@ -631,18 +689,23 @@ def sound_event_detection(args):
     json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
     ai_threshold = 0.05
     events_derivative = collections.defaultdict(list)
+    
+    # We already loaded framewise_output in Phase 10
+    
+    # Compute derivative (momentum of change)
+    delta_output = np.diff(framewise_output, axis=0, prepend=0)
 
     def zip_trace(trace):
         """Compress trace by replacing consecutive zeros with a skip marker."""
         zipped = []
         zero_count = 0
         for val in trace:
-            if val == 0.0:
+            if abs(val) < ai_threshold:
                 zero_count += 1
             else:
                 if zero_count > 0:
                     zipped.append({"skip": zero_count}); zero_count = 0
-                zipped.append(val)
+                zipped.append(round(float(val), 4))
         if zero_count > 0: zipped.append({"skip": zero_count})
         return zipped
 
@@ -654,7 +717,7 @@ def sound_event_detection(args):
             if prob > ai_threshold:
                 if current_event is None:
                     current_event = {
-                        "start": round(frame_index / frames_per_second, 3),
+                        "start": round(frame_index / effective_viz_fps, 3),
                         "peak": float(prob), "trace": [float(prob)]
                     }
                 else:
@@ -668,7 +731,7 @@ def sound_event_detection(args):
                 
                 events_derivative[label].append({
                     "start_time": current_event["start"],
-                    "end_time": round(frame_index / frames_per_second, 3),
+                    "end_time": round(frame_index / effective_viz_fps, 3),
                     "peak_prob": current_event["peak"],
                     "delta_trace": zip_trace(deltas)
                 })
@@ -680,7 +743,7 @@ def sound_event_detection(args):
             for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
             events_derivative[label].append({
                 "start_time": current_event["start"],
-                "end_time": round(len(probs_stream) / frames_per_second, 3),
+                "end_time": round(len(probs_stream) / effective_viz_fps, 3),
                 "peak_prob": current_event["peak"],
                 "delta_trace": zip_trace(deltas)
             })
@@ -697,7 +760,7 @@ def sound_event_detection(args):
     popularity = np.sum(framewise_output, axis=0)
     top_50_indices = np.argsort(popularity)[::-1][:50]
     
-    times = [round(i / frames_per_second, 2) for i in range(frames_num)]
+    times = [round(i / effective_viz_fps, 2) for i in range(frames_num)]
     traces_data = []
     for idx in top_50_indices:
         traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
@@ -710,7 +773,7 @@ def sound_event_detection(args):
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>Audio Analysis - {base_filename_for_dir}</title>
+    <title>Audio Analysis - {base_name}</title>
     <script type="text/javascript">{plotly_js}</script>
     <style>
         body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
@@ -721,7 +784,7 @@ def sound_event_detection(args):
 </head>
 <body>
     <div class="header">
-        <h1>Sound Event Analysis: {base_filename_for_dir}</h1>
+        <h1>Sound Event Analysis: {base_name}</h1>
         <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.csv</code></p>
     </div>
     <div id="plot"></div>
@@ -762,8 +825,8 @@ def sound_event_detection(args):
         
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
         if args.dynamic_eventogram:
-            output_video_path = os.path.join(output_dir, f"{base_filename}_eventogram_dynamic.mp4")
-            window_frames = int(args.window_duration * frames_per_second)
+            output_video_path = os.path.join(output_dir, f"{base_name}{tag_suffix}_eventogram_dynamic.mp4")
+            window_frames = int(args.window_duration * effective_viz_fps)
             half_window = window_frames // 2 
 
             # PRECOMPUTE: Map every data point to its local acoustic window (once per run)
@@ -775,8 +838,8 @@ def sound_event_detection(args):
                 # Adaptive logic: Try to center the window on acoustic "peaks" rather than strict time
                 if args.use_adaptive_window:
                     kl_threshold = 0.5
-                    lookahead_f = int(adaptive_lookahead * frames_per_second)
-                    for offset in range(half_window, half_window + lookahead_f, int(frames_per_second)):
+                    lookahead_f = int(adaptive_lookahead * effective_viz_fps)
+                    for offset in range(half_window, half_window + lookahead_f, int(max(1, effective_viz_fps))):
                         if start_f - offset >= 0:
                             prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
                             curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
@@ -816,7 +879,7 @@ def sound_event_detection(args):
                 """High-speed redraw using set_data instead of creating new plots."""
                 data = precomputed_data[i]
                 s_f, e_f = data['start'], data['end']
-                t_start, t_end, t_curr = s_f / frames_per_second, e_f / frames_per_second, i / frames_per_second
+                t_start, t_end, t_curr = s_f / effective_viz_fps, e_f / effective_viz_fps, i / effective_viz_fps
                 
                 im_spec.set_data(stft_log[:, s_f:e_f]); im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
                 im_event.set_data(data['out'].T); im_event.set_extent([t_start, t_end, 0, top_k])
@@ -832,10 +895,11 @@ def sound_event_detection(args):
                     ax.set_xlim(t_start, t_end); line.set_xdata([t_curr, t_curr])
                 
                 fig_fr.canvas.draw()
-                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((fig_height_px, fig_width_px, 4))[:,:,:3]
+                c_w, c_h = fig_fr.canvas.get_width_height()
+                return np.frombuffer(fig_fr.canvas.buffer_rgba(), dtype=np.uint8).reshape((c_h, c_w, 4))[:,:,:3]
 
         else: # Static Eventogram (Just a moving red line over the PNG)
-            output_video_path = os.path.join(output_dir, f'{base_filename}_eventogram_static.mp4')
+            output_video_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_static.mp4')
             base_img = plt.imread(fig_path)
             if base_img.dtype == np.float32: base_img = (base_img * 255).astype(np.uint8)
             base_img = base_img[:, :, :3]
@@ -849,25 +913,67 @@ def sound_event_detection(args):
                 return img
 
         # --- SMART CACHE LAYER ---
-        # Since video FPS (30) >> data FPS (5), we reuse the last rendered frame
+        # Since video FPS (30) >> data Hz (5), we reuse the last rendered frame
         # for 6 consecutive video frames to save ~80% of CPU rendering time.
         frame_cache = {"last_i": -1, "last_img": None}
 
         def make_frame(t):
-            i = min(int(t * frames_per_second), frames_num - 1)
+            i = min(int(t * effective_viz_fps), frames_num - 1)
             if i == frame_cache["last_i"]: return frame_cache["last_img"]
             
             img = draw_strategy(i)
             frame_cache.update({"last_i": i, "last_img": img})
             return img
 
-        # Final Compositing & Export
-        eventogram_clip = VideoClip(make_frame, duration=duration)
-        audio_clip = AudioFileClip(video_input_path)
-        final_clip = eventogram_clip.with_audio(audio_clip)
-        final_clip.fps = output_fps
+        # --- DYNAMIC DIMENSION PROBE ---
+        # Claude's Fix: Since 'bbox_inches=tight' changes the PNG size, we probe the 
+        # first frame to get the 'Visual Truth' before opening the pipe.
+        first_frame = make_frame(0)
+        v_h, v_w, _ = first_frame.shape
         
-        final_clip.write_videofile(output_video_path, codec="libx264", fps=output_fps, threads=os.cpu_count())
+        # Ensure even dimensions for yuv420p compatibility (FFmpeg requirement)
+        v_w, v_h = v_w // 2 * 2, v_h // 2 * 2
+        
+        # Final Compositing & Export (Direct FFmpeg Pipe - Zero Temp Files)
+        total_output_frames = int(duration * output_fps)
+        
+        # FFmpeg setup: Pipe 0 is raw video frames; Input 1 is the original audio
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{v_w}x{v_h}",
+            "-pix_fmt", "rgb24", "-r", str(output_fps),
+            "-i", "pipe:0",          # Raw frames from Python
+            "-i", inference_media,   # Audio from source
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "copy",          # 1:1 Audio Stream Copy
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-shortest", output_video_path, "-loglevel", "warning"
+        ]
+        
+        print(f"🎬  Encoding video via direct pipe ({v_w}x{v_h}, {total_output_frames} frames)...")
+        ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+        try:
+            for frame_idx in range(total_output_frames):
+                t = frame_idx / output_fps
+                frame = make_frame(t)
+                
+                # Surgical Crop: Ensure buffer matches the 'even' dimensions promised to FFmpeg
+                if frame.shape[0] > v_h or frame.shape[1] > v_w:
+                    frame = frame[:v_h, :v_w, :]
+                
+                ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
+                
+                if frame_idx % (output_fps * 10) == 0:
+                    percent = (frame_idx / total_output_frames) * 100
+                    print(f"   Progress: {percent:.1f}% ({t:.0f}s / {duration:.0f}s)", end="\r")
+            
+            print(f"   Progress: 100.0% ({duration:.0f}s / {duration:.0f}s)")
+        finally:
+            ffmpeg_proc.stdin.close()
+            ffmpeg_proc.wait()
+
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
 
@@ -876,15 +982,15 @@ def sound_event_detection(args):
             print("🎬  Overlaying the source media with the created eventogram…")
             final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
             
-            # Re-probe original dimensions to ensure pixel-perfect scaling
-            _, _, b_w, b_h = get_duration_and_fps(overlay_source_path)
+            # Use pre-probed dimensions (no redundant FFprobe call)
+            b_w, b_h = video_width, video_height
             
-            # Scaling logic: Match the width of the overlay to the source (or vice versa)
-            t_w, t_h = (b_w, b_h) if b_w >= fig_width_px else (fig_width_px, int(b_h * fig_width_px / b_w))
-            if t_h % 2: t_h += 1 # FFmpeg requires even dimensions for H.264
+            # Leaner Scaling: Match eventogram width (1280px) if source is smaller; force even height
+            t_w = max(b_w, fig_width_px)
+            t_h = int(b_h * t_w / b_w) // 2 * 2 
             
             overlay_cmd = [
-                "ffmpeg", "-y", "-i", overlay_source_path, "-i", output_video_path, "-loglevel", "warning",
+                "ffmpeg", "-y", "-i", overlay_media, "-i", output_video_path, "-loglevel", "warning",
                 "-filter_complex", (
                     f"[0:v]scale={t_w}:{t_h}[main];" # Scale source video
                     f"[1:v]scale={t_w}:{int(t_h * args.overlay_size)}[ovr];" # Scale eventogram
@@ -892,7 +998,7 @@ def sound_event_detection(args):
                     "[main][ovr_t]overlay=x=0:y=H-h[v]" # Stack them at the bottom
                 ),
                 "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-shortest"
+                "-c:a", "copy", "-shortest"
             ]
             if args.bitrate: overlay_cmd.extend(["-b:v", args.bitrate])
             else: overlay_cmd.extend(["-crf", str(args.crf)])
@@ -942,7 +1048,10 @@ if __name__ == '__main__':
     parser.add_argument('--dynamic_eventogram', action='store_true', default=False,
                         help='Generate dynamic eventogram with scrolling window (slower to generate)')
     parser.add_argument('--static_eventogram', action='store_true', default=False,
-                        help='Generate static eventogram with a scrolling marker (faster to generate)')                        
+                        help='Generate static eventogram with a scrolling marker (faster to generate)')
+    parser.add_argument('--no-shapash', action='store_true', default=False,
+                        help='Skip Shapash dashboard launch')
+                        
     parser.add_argument('--crf', type=int, default=23, help='FFmpeg CRF value (0-51, lower is higher quality)')
     parser.add_argument('--bitrate', type=str, default=None, help='FFmpeg video bitrate (e.g., "2000k" for 2 Mbps)')
     parser.add_argument('--window_duration', type=float, default=30.0,
@@ -950,11 +1059,11 @@ if __name__ == '__main__':
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
     parser.add_argument('--csv_fps', type=int, default=5,
-                        help='FPS to write to full_event_log.csv. '
+                        help='Data frames per second (Hz) to write to full_event_log.csv. '
                              'Use 100 for full resolution (very large file). '
                              '5 is enough for Shapash + outlier detection.')
     parser.add_argument('--vis_fps', type=int, default=5,
-                        help='FPS for internal RAM-based visualization data (RAM guard)')
+                        help='Data frames per second (Hz) for internal RAM-based visualization data (RAM guard)')
     parser.add_argument('--output_fps', type=int, default=30,
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
@@ -970,47 +1079,55 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.8.8") 
+    print(f"Eventogrammer, version 6.11.1") 
+    print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
+    print()
 
-    print(f"This script is an adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn so see there if something be amiss.")    
-    print(f"    Recent material Changes:  * Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. * Speed Hack: Persistent Matplotlib figures with Artist Updates. * Visual Fix: Proper window centering for scrolling eventograms. Gemini AI rationalized code in many places.")
+    print(f"Recent Material Changes:")
+    print(f"*H5py used instead of CSV to save disk space.")
+   
+    print(f"* We completely removed moviepy: ffmpeg shall do it. Needs much testing.")
+    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
+    print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
 
     print(f"Note on the models:")   
-    print(f"* `Cnn14_DecisionLevelMax_mAP=0.385.pth` (Sound Event Detection): This model uses Decision-level pooling. It calculates classification probabilities for every small segment of time first, and only then takes the maximum probability to represent the whole clip. Resolution: Cnn14_DecisionLevelMax is specifically designed for Sound Event Detection (SED). Because it maintains the time dimension through the classifier, it can output the framewise_output used by the inference script to generate the 'Eventograms' and the CSV logs.")
-    print(f"* The other models are good for audio tagging: use the '--audio_tagging' switch for that mode.")
+    print(f"* Cnn14_DecisionLevelMax (Sound Event Detection): Uses Decision-level pooling to maintain")
+    print(f"  time resolution. Essential for generating Eventograms and high-res CSV logs.")
+    print(f"* Other models: Best for global audio tagging (use the '--audio_tagging' mode).")
     print()
-    print(f"Note on the processing speed: The processing time ratio now is: 15 second of the orignal duration takes 1 seconds to process on a regular 300 GFLOPs, 4 core CPU, without video visualizations.") 
-    
-    print(f"It works 1.7 times faster in Prooted Debian than in Termux, see the comments why so.")  
-            
-    print(f"Note on the out of memory crashes: close all other programs in Droid, especially the browser. Or just restart whole phone. Or do it in Recovery.")  
-    
 
+    print(f"Performance & Stability:") 
+    print(f"* Processing ratio: ~15s audio per 1s CPU time (300 GFLOPs, 4-core, no viz).") 
+    print(f"* Platform Gap: works ~1.7x faster in Prooted Debian than in Termux (Eigen BLAS).")  
+    print(f"* OOM Safety: Close browsers or restart whole phone if crashes occur in Termux.")  
+    print()
 
-    print(f"If the file is too long, use e.g. this to split:") 
-    print(f"mkdir split_input_media && cd split_input_media && ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print(f"Split Suggestion:") 
+    print(f"If the file is too long, use FFmpeg to segment it first:") 
+    print(f"mkdir split_input_media && cd split_input_media && \\")
+    print(f"ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print(f"time bash -c 'for file in ""*; do bash audio_me.sh \"$file\" --dynamic_eventogram; done'")
+    print()
 
-    # In Termux your PyTorch build is explicitly: USE_EIGEN_FOR_BLAS=ON. It means: PyTorch tensor ops that would normally dispatch to BLAS/LAPACK are not using an external high-performance BLAS backend at all. They are using Eigen’s generic CPU kernels compiled into PyTorch. That decision is compile-time, not runtime. In practice: same workload, same model family, same CPU class, different environments, and we observed a consistent ~1.7× gap in wall time (Termux ~14 min vs Debian ~8 min).
-    
-    print("Tips on bugs: 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
-    print("This is often a version mismatch between torch and torchaudio, simply run:")
-    print("pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
-    print("pip install -U torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
-    print("In e.g. Prooted Debian under Termux, torchcodec has dependencies on NVIDA .so files and the script errors, so you may need to git clone and pip install it from scratch (which works without a hitch) then.")
+    print("Tips & Environment Hacks:")
+    print("* For 'undefined symbol: torch_library_impl' or 'NotImplementedError':")
+    print("  Run: pip install -U torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu")
+    print("* If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:")
+    print("  Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)")
+    print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
+    print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
+    print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
+    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions")
+    print()
 
-    print(f"If you see 'NotImplementedError: sys.platform = android' after an update:")
-    print(f"1. Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
-    print("2. Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":' - it works.")
-    
-    print(f"")    
-    
-    print(f"Using moviepy version: {moviepy.__version__}")
-    print(f"Using torchaudio version: {torchaudio.__version__}")
-    # May need to be disabled as it errors if installed some weird version 0 dev. 
-    print(f"Using torchcodec version: {torchcodec.__version__}") 
-
-    print(f"")
+    print(f"Dependency Versions:")
+    print(f"Torch: {torch.__version__ if torch else 'Not Available'}")
+    print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
+    # May need to be disabled as it errors if installed some weird version 0 dev.
+    print(f"Torchcodec: {torchcodec.__version__ if torchcodec else 'Not Available'}")
+ 
+    print()
 
     if len(sys.argv) == 1:
         parser.print_help()
@@ -1024,3 +1141,7 @@ if __name__ == '__main__':
         audio_tagging(args)
     else:
         sound_event_detection(args)
+
+ 
+    print()
+

@@ -469,65 +469,77 @@ def sound_event_detection(args):
         resampler = torchaudio.transforms.Resample(orig_freq=native_sr, new_freq=sample_rate).to(device)
 
     if not skip_inference:
-        # Initialize HDF5 for OOM-safe, memory-efficient logging
+        # Pre-calculate total rows to enable pre-allocation
+        total_rows_est = int(np.ceil(duration * args.csv_fps))
+        
+        # Initialize HDF5 with NO compression during the loop to avoid single-threaded stalls.
+        # Pre-allocating the shape prevents expensive resizing during inference.
         h5_file = h5py.File(h5_path, 'w')
-        h5_dataset = h5_file.create_dataset('framewise_output', shape=(0, len(labels)), maxshape=(None, len(labels)), dtype='float32', compression='gzip', compression_opts=4)
+        h5_dataset = h5_file.create_dataset('framewise_output', 
+                                            shape=(total_rows_est, len(labels)), 
+                                            maxshape=(None, len(labels)), 
+                                            dtype='float32')
         h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
-        h5_file.create_dataset('timestamps', shape=(0,), maxshape=(None,), dtype='float32', compression='gzip', compression_opts=4)
+        h5_timestamps = h5_file.create_dataset('timestamps', 
+                                               shape=(total_rows_est,), 
+                                               maxshape=(None,), 
+                                               dtype='float32')
 
         current_row = 0
         for start_frame in range(0, native_num_frames, native_chunk_samples):
-            # Surgical Load: Seek directly to chunk
-            chunk_waveform, _ = torchaudio.load(
+            # Surgical Load: Use soundfile for true O(1) seeking on MP3/WAV
+            # This prevents re-decoding the start of the file for every chunk.
+            import soundfile as sf
+            chunk_numpy, _ = sf.read(
                 inference_media,
-                frame_offset=start_frame,
-                num_frames=native_chunk_samples
+                start=start_frame,
+                frames=native_chunk_samples,
+                always_2d=True,
+                dtype='float32'
             )
 
-            if chunk_waveform.shape[1] == 0: break
+            if len(chunk_numpy) == 0: break
 
             # Step A: Pre-processing (Mono + Resample)
-            chunk_waveform = chunk_waveform.mean(dim=0, keepdim=True).to(device)
+            # chunk_numpy is [frames, channels]. Convert to Torch [1, samples]
+            chunk_waveform = torch.from_numpy(chunk_numpy).t().mean(dim=0, keepdim=True).to(device)
+
             if resampler:
                 chunk_waveform = resampler(chunk_waveform)
-
-            # Prepare for model (expects [batch_size, samples])
-            chunk_tensor = chunk_waveform
 
             # Step B: Inference
             with torch.no_grad():
                 model.eval()
-                batch_output_dict = model(chunk_tensor, None)
+                batch_output_dict = model(chunk_waveform, None)
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
 
-            # Step C: Write high-res results to disk (OOM-safe, vectorized streaming to HDF5)
+            # Step C: Write results to disk (OOM-safe, vectorized streaming to HDF5)
             chunk_start_time = start_frame / native_sr
             csv_downsample = max(1, inference_fps // args.csv_fps)
 
-            # Select downsampled rows from this chunk
             downsampled_data = chunk_out[::csv_downsample]
             num_rows = downsampled_data.shape[0]
-
-            # Pre-calculate timestamps for the downsampled rows
             downsampled_timestamps = np.array([chunk_start_time + (i / inference_fps) 
                                                for i in range(0, len(chunk_out), csv_downsample)], dtype='float32')
 
-            # Resize datasets in one go
-            h5_dataset.resize(current_row + num_rows, axis=0)
-            h5_file['timestamps'].resize(current_row + num_rows, axis=0)
+            # Ensure pre-allocation was enough (safety check)
+            if current_row + num_rows > h5_dataset.shape[0]:
+                h5_dataset.resize(current_row + num_rows + 1000, axis=0)
+                h5_timestamps.resize(current_row + num_rows + 1000, axis=0)
 
-            # Vectorized write
+            # Fast Vectorized Write (No compression / No flush = High CPU utilization)
             h5_dataset[current_row : current_row + num_rows] = downsampled_data.astype('float32')
-            h5_file['timestamps'][current_row : current_row + num_rows] = downsampled_timestamps
+            h5_timestamps[current_row : current_row + num_rows] = downsampled_timestamps
 
             current_row += num_rows
-            h5_file.flush()
+            
             # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
             for i in range(0, len(chunk_out), vis_downsample):
                 vis_slice = chunk_out[i : i + vis_downsample]
                 if len(vis_slice) > 0:
-                    framewise_viz_buffer[current_viz_row] = np.max(vis_slice, axis=0)
-                    current_viz_row += 1
+                    if current_viz_row < len(framewise_viz_buffer):
+                        framewise_viz_buffer[current_viz_row] = np.max(vis_slice, axis=0)
+                        current_viz_row += 1
 
             # Step E: STFT for visualization background
             chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
@@ -537,20 +549,23 @@ def sound_event_detection(args):
                 window=torch.hann_window(window_size).to(device),
                 center=True, return_complex=True
             ).abs().cpu().numpy()
-            stft_vis_list.append(chunk_stft[:, ::vis_downsample])
+            # FIX: Use .copy() to release large original buffers from memory
+            stft_vis_list.append(chunk_stft[:, ::vis_downsample].copy())
 
             # Cleanup
-            del chunk_waveform, chunk_tensor, chunk_numpy, chunk_tensor_stft, chunk_stft
+            del chunk_waveform, chunk_numpy, chunk_tensor_stft, chunk_stft, chunk_out, batch_output_dict, downsampled_data
+            import gc
+            gc.collect()
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
             
             avail_ram = psutil.virtual_memory().available / (1024 * 1024)
             print(f"Chunk at {int(chunk_start_time/60)}m finished. (RAM Avail: {avail_ram:.0f} MB)")
             
+        # Trim dataset to final size
+        h5_dataset.resize(current_row, axis=0)
+        h5_timestamps.resize(current_row, axis=0)
         h5_file.close()
-
-        import gc
-        gc.collect()
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
     if not skip_inference:
