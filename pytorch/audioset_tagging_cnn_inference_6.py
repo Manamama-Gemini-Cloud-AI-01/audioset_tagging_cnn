@@ -992,14 +992,13 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.10.1") 
+    print(f"Eventogrammer, version 6.10.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print()
 
     print(f"Recent Material Changes:")
     print(f"* We completely removed moviepy: ffmpeg shall do it. Needs much testing.")
- 
-    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files). Moviepy renders silent audio and we ffmpeg it back adding original audio to avoid no disk space crashes.")
+    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
 
