@@ -514,7 +514,6 @@ def sound_event_detection(args):
         for start_frame in range(0, native_num_frames, native_chunk_samples):
             # Surgical Load: Use soundfile for true O(1) seeking on MP3/WAV
             # This prevents re-decoding the start of the file for every chunk.
-            import soundfile as sf
             chunk_numpy, _ = sf.read(
                 inference_media,
                 start=start_frame,
