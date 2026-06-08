@@ -1126,7 +1126,7 @@ if __name__ == '__main__':
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
     print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions")
     
-    print("* If: 'LibsndfileError: File contains data in an unimplemented format', thenL  'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
+    print("* If: 'LibsndfileError: File contains data in an unimplemented format', then 'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
 
     print()
 
