@@ -272,8 +272,11 @@ You may notice that **Inference SR** (32,000 Hz) is often higher than the **Nati
 
 ### 4. Forensic Complement: Essentia
 While PANNs excel at identifying the **"Physical Reality"** (e.g., specific instruments, textures, or "Acoustic Metaphors"), it does not track musical grammar like Tempo or Key. To achieve a complete "Acoustic Archeology" profile, integrate **Essentia**:
-- **Purpose:** Use for precise BPM detection, Key/Scale estimation, and Danceability scores.
-- **Workflow:** Run an Essentia-based Python script alongside PANNs to compare the mathematical downbeats with the AI's sound event peaks.
-- **Implementation:** Use the `context7-mcp` (Context7) tool to fetch current documentation and implementation snippets for Essentia's `MusicExtractor` and `RhythmExtractor2013` algorithms.
 
+## 14. Work Log (June 2026)
+
+- **Sanitized Video Handling:** Implemented a "Sanitary Audio Gate" (Phase 4) in `pytorch/audioset_tagging_cnn_inference_6.py` to automatically extract audio from video/non-supported containers to an intermediate MP3 using `ffmpeg`.
+- **Interactive Dashboard Enhancements:** Added "The Acoustic Explorer" functionality. Integrated HTML5 `<video>` player, CSS fixes for full width, and JavaScript for click-to-seek functionality from the Plotly graph.
+- **Documentation:** Updated `docs/auditory_cognition_guide_template.md` to reflect HDF5-based data storage and updated the CLI commands.
+- **Diagnostic Resolution:** Fixed `BrokenPipeError` issues by refining the sanitization process and resolving script-level import conflicts (`UnboundLocalError`).
 

@@ -388,7 +388,7 @@ def sound_event_detection(args):
     source_ext = os.path.splitext(source_media)[1][1:].upper()
     
     # Transcode if it's a video container or if soundfile doesn't natively support the extension
-    if is_video or (source_ext not in sf_formats):
+    if  source_ext not in sf_formats:
         if has_mp3_support:
             target_ext = "mp3"
             print(f"🎬  Media '{source_ext}' needs sanitization. Extracting audio to MP3...")
@@ -488,7 +488,7 @@ def sound_event_detection(args):
     print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
     if vis_agg_factor > 1:
-        print(f"    💡 Aesthetic Decoupling: Aggregating {vis_agg_factor}x into {max_vis_cols} RAM columns.")
+        print(f"💡 Aesthetic Decoupling: Aggregating {vis_agg_factor}x into {max_vis_cols} RAM columns.")
 
     resampler = None
     if native_sr != sample_rate:
@@ -796,7 +796,18 @@ def sound_event_detection(args):
     for idx in top_50_indices:
         traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
     
-    json_payload = json.dumps({"times": times, "traces": traces_data})
+    # Build tick labels — timedelta gives "H:MM:SS" for <24h
+    max_time = max(times) if times else 0
+    tick_interval = max(30, int(max_time / 20))
+    tick_vals = list(range(0, int(max_time) + tick_interval, tick_interval))
+    tick_text = [str(datetime.timedelta(seconds=v)) for v in tick_vals]
+
+    json_payload = json.dumps({
+        "times": times,
+        "traces": traces_data,
+        "tick_vals": tick_vals,
+        "tick_text": tick_text
+    })
     plotly_js = pyo.get_plotlyjs()
     
     html_content = f"""
@@ -807,21 +818,19 @@ def sound_event_detection(args):
     <title>Audio Analysis - {base_name}</title>
     <script type="text/javascript">{plotly_js}</script>
     <style>
-        body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
+        body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; box-sizing: border-box; }}
         #plot {{ width: 100%; height: 50vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
         .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
         code {{ background: #eee; padding: 2px 5px; border-radius: 4px; }}
-        {'#videoPlayer' if is_video else '#audioPlayer'} {{ width: 100%; max-width: 100%; display: block; }}
-        </style>
-        </head>
+        #mediaPlayer {{ width: 100%; max-width: 100%; display: block; box-sizing: border-box; }}
+    </style>
+</head>
 <body>
     <div class="header">
         <h1>Sound Event Analysis: {base_name}</h1>
         <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.h5</code></p>
     </div>
-    {'<video controls id="mediaPlayer" src="' + audio_path + '" type="video/mp4">' if is_video else '<audio controls id="mediaPlayer" src="' + audio_path + '" type="audio/mpeg">'}
-        Your browser does not support the {'video' if is_video else 'audio'} tag.
-    </{'video' if is_video else 'audio'}>
+    <video controls id="mediaPlayer" src="{audio_path}"></video>
     <div id="plot"></div>
     <script type="text/javascript">
         const data = {json_payload};
@@ -831,7 +840,13 @@ def sound_event_detection(args):
         }}));
         Plotly.newPlot('plot', traces, {{
             title: 'Top 50 Sound Events Momentum',
-            xaxis: {{ title: 'Seconds', tickformat: ',.0f', gridcolor: '#eee' }},
+            xaxis: {{
+                title: 'Time (MM:SS)',
+                tickvals: data.tick_vals,
+                ticktext: data.tick_text,
+                hoverformat: '.1f',
+                gridcolor: '#eee'
+            }},
             yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
             hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             margin: {{ t: 50, b: 50, l: 60, r: 20 }}
@@ -1125,14 +1140,13 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.11.2") 
+    print(f"Eventogrammer, version 6.12.1") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
-    print()
-
     print(f"Recent Material Changes:")
-    print(f"*H5py used instead of CSV to save disk space.")
+    print(f"*Media player added to plotly graph.")
    
-    print(f"* We completely removed moviepy: ffmpeg shall do it. Needs much testing.")
+    print(f"*H5py used instead of CSV to save disk space.")
+    print(f"* We completely removed moviepy: ffmpeg shall do it. Needs testing.")
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
