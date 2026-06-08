@@ -381,16 +381,41 @@ def sound_event_detection(args):
             print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
             return
 
-    # --- PHASE 4: Media Integrity & Recovery ---
-    # Recovery: Attempt conversion to MP3 if duration detection returned 0
+    # --- PHASE 4: Media Integrity & Recovery (Sanitary Gate) ---
+    sf_formats = sf.available_formats()
+    has_mp3_support = 'MP3' in sf_formats
+    source_ext = os.path.splitext(source_media)[1][1:].upper()
+    
+    # Transcode if it's a video container or if soundfile doesn't natively support the extension
+    if is_video or (source_ext not in sf_formats):
+        if has_mp3_support:
+            target_ext = "mp3"
+            print(f"🎬  Media '{source_ext}' needs sanitization. Extracting audio to MP3...")
+        else:
+            target_ext = "wav"
+            print(f"\033[1;33mWarning: Media '{source_ext}' not supported and MP3 support is missing in libsndfile.\033[0m")
+            print(f"🎬  Extracting to WAV (Caution: High disk space usage).")
+        
+        temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_sanitized_{base_name}.{target_ext}')
+        try:
+            # Minimalist transcode: Rely on FFmpeg for smart stream mapping and default quality
+            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, temp_audio_path, '-y'], check=True)
+            inference_media = temp_audio_path
+            # Refresh duration and metadata for the sanitized file
+            duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
+        except Exception as e:
+            print(f"\033[1;31mError: Sanitary extraction failed: {e}\033[0m")
+            return
+
+    # Fallback Recovery: If duration is still 0 (e.g. corrupt header), attempt emergency recovery
     if duration == 0:
-        print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting MP3 recovery...\033[0m")
+        print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting emergency recovery...\033[0m")
         mp3_path = os.path.join(tempfile.gettempdir(), f"{base_name}_recovered.mp3")
 
         try:
             subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
             inference_media = mp3_path # Rest of the script uses this recovered file
-            duration, video_fps, video_width, video_height, is_video, r_fps = get_media_metadata(inference_media)
+            duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
