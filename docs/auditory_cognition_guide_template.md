@@ -46,17 +46,17 @@ Start here. These files don't require querying a server. They're the ground trut
 
 ### Full Event Log (The Raw Matrix)
 
-**File:** `full_event_log.csv`
+**File:** `full_event_log.h5`
 
-**What to do:** Don't try to read it—it's huge (9MB+). Instead, query it with tools.
+**What to do:** Don't try to read it directly—it's a large binary file. Instead, inspect its metadata with `h5dump` or query it using Python with the `h5py` library.
 
 **What it tells you:**
 
-- Every sound class probability for every time frame.
+- Every sound class probability for every time frame, stored as a high-performance matrix.
 - The raw material that Shapash's dashboard visualizes.
 - The source of truth for "did this sound occur at this moment?"
 
-**Critical insight:** This CSV is structured like a database table, not a spreadsheet. Each row is a time frame. Each column is a sound class. You'll query it using the same logic as the Shapash server.
+**Critical insight:** This file is structured as an HDF5 database, not a spreadsheet. You'll query it using the same logic as the Shapash server or by loading specific datasets into memory via `h5py`.
 
 ### Detailed Delta JSON (Attack/Decay Signatures)
 
@@ -100,17 +100,17 @@ Before you trust Shapash explanations, understand PANNs quirks:
 
 ---
 
-The Forensic Command
+### The Forensic Command
 
 Use the following command to determine what "makes a sound what it is" (e.g., why the model thinks a window break is a "Splash" or a vocal is "Heavy Metal"):
 
 ```bash
-python3 scripts/Shapash_visualization/launch_correlations_dashboard.py <PATH_TO_CSV> --target "<SOUND_CLASS>"
+python3 scripts/Shapash_visualization/launch_correlations_dashboard.py <PATH_TO_H5> --target "<SOUND_CLASS>"
 ```
 
 ### Parameters:
 
-- `<PATH_TO_CSV>`: Path to the `full_event_log.csv` artifact.
+- `<PATH_TO_H5>`: Path to the `full_event_log.h5` artifact.
 - `--target`: The specific sound class to explain (use the exact name from the vocabulary discovery).
 
 ## Interrogating the "Acoustic DNA"
@@ -692,7 +692,7 @@ This is how you work. This is how the Shapash server should be interrogated.
 The standard output of the `audioset_tagging_cnn` script includes the following files: 
 
 * `summary_events.csv`: A summary of prominent, continuous sound events.
-* `full_event_log.csv`: A detailed matrix of sound event probabilities for every time frame.
+* `full_event_log.h5`: A detailed matrix of sound event probabilities for every time frame, stored in HDF5 format.
 * `detailed_events_delta_ai_attention_friendly.json`: Detailed event intervals with delta traces for momentum analysis.
 * `shapash_brain_*.pkl`: A precomputed "Acoustic Brain" explaining the correlations for a specific sound class (e.g., why it thinks it's a "Cricket").
 * `eventogram.png`: A static visualization of the top 10 sound events over time.
