@@ -358,6 +358,7 @@ def sound_event_detection(args):
     # Full Skip Logic: If CSV AND all requested videos exist
     if skip_inference and all(os.path.exists(f) for f in video_outputs):
         print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
+        print(f"To start anew, execute e.g.: \033[1;31m rm -rf {output_dir}\033[1;0m")
         return
 
     # Check for sufficient disk space
@@ -807,16 +808,20 @@ def sound_event_detection(args):
     <script type="text/javascript">{plotly_js}</script>
     <style>
         body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
-        #plot {{ width: 100%; height: 85vh; background: white; border-radius: 8px; border: 1px solid #ddd; }}
+        #plot {{ width: 100%; height: 50vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
         .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
         code {{ background: #eee; padding: 2px 5px; border-radius: 4px; }}
-    </style>
-</head>
+        {'#videoPlayer' if is_video else '#audioPlayer'} {{ width: 100%; max-width: 100%; display: block; }}
+        </style>
+        </head>
 <body>
     <div class="header">
         <h1>Sound Event Analysis: {base_name}</h1>
-        <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.csv</code></p>
+        <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.h5</code></p>
     </div>
+    {'<video controls id="mediaPlayer" src="' + audio_path + '" type="video/mp4">' if is_video else '<audio controls id="mediaPlayer" src="' + audio_path + '" type="audio/mpeg">'}
+        Your browser does not support the {'video' if is_video else 'audio'} tag.
+    </{'video' if is_video else 'audio'}>
     <div id="plot"></div>
     <script type="text/javascript">
         const data = {json_payload};
@@ -826,11 +831,22 @@ def sound_event_detection(args):
         }}));
         Plotly.newPlot('plot', traces, {{
             title: 'Top 50 Sound Events Momentum',
-            xaxis: {{ title: 'Seconds', gridcolor: '#eee' }},
+            xaxis: {{ title: 'Seconds', tickformat: ',.0f', gridcolor: '#eee' }},
             yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
             hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             margin: {{ t: 50, b: 50, l: 60, r: 20 }}
         }}, {{ responsive: true }});
+
+        const mediaPlayer = document.getElementById('mediaPlayer');
+        if (mediaPlayer) {{
+            document.getElementById('plot').on('plotly_click', function(data){{
+                if(data.points.length > 0) {{
+                    const clickedTime = data.points[0].xaxis.d2l(data.points[0].x);
+                    mediaPlayer.currentTime = clickedTime;
+                    mediaPlayer.play();
+                }}
+            }});
+        }}
     </script>
 </body>
 </html>
