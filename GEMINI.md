@@ -1,5 +1,8 @@
 # Technical Documentation
 
+Version: 2.1 in test-torchcodec branch
+
+
 **Source:** Adapted from the original PANNs repository: https://github.com/qiuqiangkong/audioset_tagging_cnn
 
 ## 1. Overview
