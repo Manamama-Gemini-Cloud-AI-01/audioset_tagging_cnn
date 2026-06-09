@@ -358,7 +358,7 @@ def sound_event_detection(args):
     # Full Skip Logic: If CSV AND all requested videos exist
     if skip_inference and all(os.path.exists(f) for f in video_outputs):
         print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
-        print(f"To start anew, execute e.g.: \033[1;31m rm -rf {output_dir}\033[1;0m")
+        print(f"To start anew, execute e.g.: \033[1;31m rm -rf \"{output_dir}\"\033[1;0m")
         return
 
     # Check for sufficient disk space
@@ -387,26 +387,13 @@ def sound_event_detection(args):
     has_mp3_support = 'MP3' in sf_formats
     source_ext = os.path.splitext(source_media)[1][1:].upper()
     
-    # Transcode if it's a video container or if soundfile doesn't natively support the extension
-    if  source_ext not in sf_formats:
-        if has_mp3_support:
-            target_ext = "mp3"
-            print(f"🎬  Media '{source_ext}' needs sanitization. Extracting audio to MP3...")
-        else:
-            target_ext = "wav"
-            print(f"\033[1;33mWarning: Media '{source_ext}' not supported and MP3 support is missing in libsndfile.\033[0m")
-            print(f"🎬  Extracting to WAV (Caution: High disk space usage).")
-        
-        temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_sanitized_{base_name}.{target_ext}')
-        try:
-            # Minimalist transcode: Rely on FFmpeg for smart stream mapping and default quality
-            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, temp_audio_path, '-y'], check=True)
-            inference_media = temp_audio_path
-            # Refresh duration and metadata for the sanitized file
-            duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
-        except Exception as e:
-            print(f"\033[1;31mError: Sanitary extraction failed: {e}\033[0m")
-            return
+    # Always re-encode to CBR MP3 to fix seekability/drift issues
+    print(f"🎬  Re-encoding input to CBR MP3 for seeking stability...")
+    temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, '-c:a', 'libmp3lame', '-b:a', '41k', temp_audio_path, '-y'], check=True)
+    inference_media = temp_audio_path
+    # Refresh duration and metadata for the sanitized file
+    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
 
     # Fallback Recovery: If duration is still 0 (e.g. corrupt header), attempt emergency recovery
     if duration == 0:
@@ -506,6 +493,10 @@ def sound_event_detection(args):
                                             maxshape=(None, len(labels)), 
                                             dtype='float32', compression='gzip')
         h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
+        h5_stft_viz = h5_file.create_dataset('stft_viz',
+                                             shape=(513, 0),
+                                             maxshape=(513, None),
+                                             dtype='float32', compression='gzip')
         h5_timestamps = h5_file.create_dataset('timestamps', 
                                                shape=(total_rows_est,), 
                                                maxshape=(None,), 
@@ -574,8 +565,12 @@ def sound_event_detection(args):
                 window=torch.hann_window(window_size).to(device),
                 center=True, return_complex=True
             ).abs().cpu().numpy()
-            # FIX: Use .copy() to release large original buffers from memory
-            stft_vis_list.append(chunk_stft[:, ::vis_downsample].copy())
+            
+            # Save downsampled STFT to HDF5
+            downsampled_stft = chunk_stft[:, ::vis_downsample].astype('float32')
+            h5_stft_viz.resize(h5_stft_viz.shape[1] + downsampled_stft.shape[1], axis=1)
+            h5_stft_viz[:, -downsampled_stft.shape[1]:] = downsampled_stft
+
 
             # Cleanup
             del chunk_waveform, chunk_numpy, chunk_tensor_stft, chunk_stft, chunk_out, batch_output_dict, downsampled_data
@@ -596,13 +591,13 @@ def sound_event_detection(args):
     if not skip_inference:
         # Use only the filled portion of the pre-allocated buffer
         framewise_output = framewise_viz_buffer[:current_viz_row]
-        stft = np.concatenate(stft_vis_list, axis=1)
-        del framewise_viz_buffer, stft_vis_list
+        stft = h5py.File(h5_path, 'r')['stft_viz'][:] # Load from HDF5 instead
+        del framewise_viz_buffer
     elif skip_inference:
         # Load data from HDF5 if inference was skipped
         with h5py.File(h5_path, 'r') as hf:
             framewise_output = hf['framewise_output'][:]
-            stft = np.zeros((1, 1)) # Dummy
+            stft = hf['stft_viz'][:]
     else:
         print("Error: Inference returned no data. Check input file or model.")
         return
@@ -1140,13 +1135,12 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.12.1") 
+    print(f"Eventogrammer, version 6.12.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
-    print(f"*Media player added to plotly graph.")
-   
-    print(f"*H5py used instead of CSV to save disk space.")
-    print(f"* We completely removed moviepy: ffmpeg shall do it. Needs testing.")
+    print(f"* Media player added to plotly graph. ")   
+    print(f"* H5py used instead of CSV to save disk space.")
+    print(f"* We convert all files to MP3")
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
     print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
     print()
