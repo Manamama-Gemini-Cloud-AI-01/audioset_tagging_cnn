@@ -502,26 +502,17 @@ def sound_event_detection(args):
                                                maxshape=(None,), 
                                                dtype='float32', compression='gzip')
 
+        from torchcodec.decoders import AudioDecoder
+        decoder = AudioDecoder(inference_media, sample_rate=sample_rate, num_channels=1)
+        
         current_row = 0
-        for start_frame in range(0, native_num_frames, native_chunk_samples):
-            # Surgical Load: Use soundfile for true O(1) seeking on MP3/WAV
-            # This prevents re-decoding the start of the file for every chunk.
-            chunk_numpy, _ = sf.read(
-                inference_media,
-                start=start_frame,
-                frames=native_chunk_samples,
-                always_2d=True,
-                dtype='float32'
-            )
-
-            if len(chunk_numpy) == 0: break
-
-            # Step A: Pre-processing (Mono + Resample)
-            # chunk_numpy is [frames, channels]. Convert to Torch [1, samples]
-            chunk_waveform = torch.from_numpy(chunk_numpy).t().mean(dim=0, keepdim=True).to(device)
-
-            if resampler:
-                chunk_waveform = resampler(chunk_waveform)
+        chunk_seconds = native_chunk_samples / native_sr
+        for i in range(0, int(duration), int(chunk_seconds)):
+            # Use torchcodec to get samples in range
+            samples = decoder.get_samples_played_in_range(start_seconds=i, stop_seconds=i + chunk_seconds).data
+            
+            # chunk_waveform is [channels, samples]
+            chunk_waveform = samples.unsqueeze(0).to(device)
 
             # Step B: Inference
             with torch.no_grad():
