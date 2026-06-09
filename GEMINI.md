@@ -210,10 +210,15 @@ To achieve 100% CPU utilization (800% on 8 cores), the HDF5 logging pipeline was
 
 ## 11. Performance Baseline (Verified 2026)
 
-On an 8-core CPU system, the optimized pipeline achieves:
+On an 8-core CPU system (Ubuntu), the optimized pipeline achieves:
 - **Throughput:** ~20x real-time speed (8.6 hours of audio analyzed in <26 minutes).
-- **CPU Utilization:** ~350-400% average (balanced for thermal stability).
 - **RAM Footprint:** Constant 3.2 GB Max RSS (No swapping).
+
+On Android/Termux (aarch64) with the `master` stable branch (CBR MP3 + HDF5 Visualization):
+- **Throughput:** ~3.2x real-time speed (1.5 hours of audio analyzed in ~26 minutes).
+- **RAM Footprint:** ~3.8 GB Peak RSS (Comfortably within 5.7 GB RAM limit).
+- **Stability:** CBR pre-encoding + HDF5 persistence eliminates decoder-drift and 'libmpg123' sync errors on long-form (1h+) media.
+
 
 ### 4. Video Rendering Speed Hack (v6.6.3 Update)
 To enable full-length video visualization on mobile devices (Android/Termux), the rendering pipeline was refactored to eliminate the "Rendering Bottleneck" caused by redundant Matplotlib and MoviePy compositing calls.
