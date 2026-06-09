@@ -502,26 +502,33 @@ def sound_event_detection(args):
                                                maxshape=(None,), 
                                                dtype='float32', compression='gzip')
 
+        from torchcodec.decoders import AudioDecoder
+        decoder = AudioDecoder(inference_media, sample_rate=sample_rate, num_channels=1)
+        
         current_row = 0
-        for start_frame in range(0, native_num_frames, native_chunk_samples):
-            # Surgical Load: Use soundfile for true O(1) seeking on MP3/WAV
-            # This prevents re-decoding the start of the file for every chunk.
-            chunk_numpy, _ = sf.read(
-                inference_media,
-                start=start_frame,
-                frames=native_chunk_samples,
-                always_2d=True,
-                dtype='float32'
-            )
+        chunk_seconds = native_chunk_samples / native_sr
+        print(f"DEBUG: Native Chunk Samples={native_chunk_samples}, Native SR={native_sr}, Chunk Seconds={chunk_seconds}")
+        for i in range(0, int(duration), int(chunk_seconds)):
+            # Use torchcodec to get samples in range
+            start_s = float(i)
+            stop_s = float(i + chunk_seconds)
+            
+            # get_samples_played_in_range returns [channels, samples]
+            samples = decoder.get_samples_played_in_range(start_seconds=start_s, stop_seconds=stop_s).data
+            
+            print(f"DEBUG: Range [{start_s}, {stop_s}], Raw Samples Shape: {samples.shape}")
 
-            if len(chunk_numpy) == 0: break
-
-            # Step A: Pre-processing (Mono + Resample)
-            # chunk_numpy is [frames, channels]. Convert to Torch [1, samples]
-            chunk_waveform = torch.from_numpy(chunk_numpy).t().mean(dim=0, keepdim=True).to(device)
-
-            if resampler:
-                chunk_waveform = resampler(chunk_waveform)
+            # Ensure samples is [1, samples] (Mono)
+            # torchcodec returns [channels, samples]. Mean over channels, then unsqueeze(0) for batch dim.
+            if samples.dim() > 1:
+                # If [channels, samples], mean over dim 0 (channels) -> [samples]
+                # If [samples, channels] (unlikely), mean over dim 1 -> [samples]
+                # Based on torchcodec docs, shape is [C, T]
+                samples = samples.mean(dim=0)
+            
+            # Now [samples], need [1, samples]
+            chunk_waveform = samples.unsqueeze(0).to(device)
+            print(f"DEBUG: Processed Chunk Shape: {chunk_waveform.shape}")
 
             # Step B: Inference
             with torch.no_grad():
@@ -530,7 +537,7 @@ def sound_event_detection(args):
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
 
             # Step C: Write results to disk (OOM-safe, vectorized streaming to HDF5)
-            chunk_start_time = start_frame / native_sr
+            chunk_start_time = float(i) # Use loop variable 'i'
             csv_downsample = max(1, inference_fps // args.csv_fps)
 
             downsampled_data = chunk_out[::csv_downsample]

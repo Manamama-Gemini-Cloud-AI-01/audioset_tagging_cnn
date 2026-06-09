@@ -13,6 +13,7 @@ Also there are other experiments here, e.g. /audioset_tagging_cnn/scripts/Shapas
 ## 2. Core Dependencies
 
 - **PyTorch & Torchaudio:** For loading the model and performing tensor operations.
+- **TorchCodec:** For high-performance, sample-accurate, and memory-efficient audio chunked decoding.
 - **NumPy & SciPy:** For numerical data manipulation.
 - **Matplotlib:** For generating the static and dynamic "Eventogram" visualizations.
 - **MoviePy:** For creating the final video outputs, including the animated marker and overlaying the visualization onto the source video.
@@ -276,7 +277,20 @@ While PANNs excel at identifying the **"Physical Reality"** (e.g., specific inst
 ## 14. Work Log (June 2026)
 
 - **Sanitized Video Handling:** Implemented a "Sanitary Audio Gate" (Phase 4) in `pytorch/audioset_tagging_cnn_inference_6.py` to automatically extract audio from video/non-supported containers to an intermediate MP3 using `ffmpeg`.
+- **TorchCodec Transition:** Replaced `soundfile` with `torchcodec` for sample-accurate, memory-efficient chunked audio decoding.
+- **Mandatory CBR Stabilization:** Enforced unconditional pre-processing of all input files to CBR MP3, eliminating MP3 seek-drift.
+- **HDF5 Visual Persistence:** Added `stft_viz` dataset to HDF5, ensuring background spectrogram visualization is preserved across reruns.
 - **Interactive Dashboard Enhancements:** Added "The Acoustic Explorer" functionality. Integrated HTML5 `<video>` player, CSS fixes for full width, and JavaScript for click-to-seek functionality from the Plotly graph.
 - **Documentation:** Updated `docs/auditory_cognition_guide_template.md` to reflect HDF5-based data storage and updated the CLI commands.
 - **Diagnostic Resolution:** Fixed `BrokenPipeError` issues by refining the sanitization process and resolving script-level import conflicts (`UnboundLocalError`).
 
+## Branching & Experimental Strategy
+- **`master`**: Contains the stable, "traditional" implementation: HDF5 visualization persistence, mandatory CBR MP3 re-encoding, and `torchcodec`-based sample-accurate chunked decoding.
+- **`test-torchcodec`**: Used for experimental prototyping of high-risk refactors. Do not use this for production analysis until merged into master.
+
+Tips & Environment Hacks:
+* For 'undefined symbol: torch_library_impl' or 'NotImplementedError':
+  Run: pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu
+* All input audio files are now automatically re-encoded to CBR MP3 to ensure consistent seekability and prevent decoder drift issues.
+* If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:
+  Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)
