@@ -180,7 +180,7 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
 
-## 9. Memory-Efficient Architecture (v6.8.12 Update)
+## 9. Memory-Efficient Architecture (v6.12.3 Update)
 
 To handle long-form recordings (e.g., >10 hours) on resource-constrained devices, the inference script uses a multi-layered memory safety strategy.
 
@@ -188,18 +188,18 @@ To handle long-form recordings (e.g., >10 hours) on resource-constrained devices
 Previously, the script would process 3-minute chunks but keep all high-resolution results in RAM. The results would spike toward 3GB for 30+ minute files.
 
 ### 2. The "Lean" Solution (Stream and Prune)
-- **Direct Disk Streaming:** High-res (100 FPS) results are written directly to `full_event_log.csv`. 
-- **50x Internal Downsampling:** Visualization structures are max-pooled to 2-5 FPS.
+- **Direct Disk Streaming:** High-res (100 FPS) results are written directly to HDF5. 
+- **Internal Downsampling:** Visualization structures are max-pooled to 2-5 FPS for the eventogram and Plotly dashboard.
 
-### 3. The "O(1) Seeking" Refactor (v6.11.1)
-The most significant performance win. Previously, `torchaudio.load()` would decode the **entire file** into RAM before chunking, or re-decode from the start for every chunk in O(N) time.
-- **SoundFile Integration:** The script now uses `soundfile.read()` for true O(1) seeking. It jumps to any second of an 8-hour MP3 or WAV file instantly without re-scanning metadata or re-decoding headers.
-- **Flat Memory Profile:** By combining `soundfile` with pre-allocated visualization buffers, RAM usage is now constant (capped at ~3.2GB for 8+ hour files) regardless of file length.
+### 3. The "TorchCodec" Engine (v6.12.3)
+The project has moved beyond `soundfile` and `torchaudio.load()` for chunked processing.
+- **Surgical Decoding:** We now use `torchcodec.decoders.AudioDecoder` for sample-accurate, O(1) seeking. 
+- **Direct Tensor I/O:** Audio is decoded directly into PyTorch tensors, eliminating the overhead of NumPy conversion and minimizing memory pressure.
+- **Constant Memory Profile:** RAM usage remains flat (approx. 2.4 GB RSS for the WALL-E test case) regardless of the file duration, as only active 3-minute chunks are decoded and processed at a time.
 
-### 4. Reference Leak Prevention (.copy() Fix)
-A critical memory fix was implemented for the visualization pipeline.
-- **The NumPy Trap:** Appending slices (views) of large tensors to lists previously kept the entire original high-resolution buffer alive in RAM.
-- **The Solution:** The script now uses `.copy()` when appending to visualization lists, ensuring that only the downsampled data is retained and the 6GB of "hidden" raw data is garbage collected after every chunk.
+### 4. Reference Leak Prevention
+- **Garbage Collection:** The script explicitly triggers `gc.collect()` and `torch.cuda.empty_cache()` after every 3-minute chunk.
+- **Vectorized Writes:** By pre-allocating HDF5 datasets, we avoid the CPU stalls associated with dynamic resizing and single-threaded compression during the inference loop.
 
 ## 10. HDF5 Bottleneck Removal (CPU Saturation)
 
