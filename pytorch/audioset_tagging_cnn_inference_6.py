@@ -386,14 +386,14 @@ def sound_event_detection(args):
     sf_formats = sf.available_formats()
     has_mp3_support = 'MP3' in sf_formats
     source_ext = os.path.splitext(source_media)[1][1:].upper()
-    
+    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)    
     # Always re-encode to CBR MP3 to fix seekability/drift issues
     print(f"🎬  Re-encoding input to CBR MP3 for seeking stability...")
     temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, '-c:a', 'libmp3lame', '-b:a', '41k', temp_audio_path, '-y'], check=True)
     inference_media = temp_audio_path
     # Refresh duration and metadata for the sanitized file
-    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
+
 
     # Fallback Recovery: If duration is still 0 (e.g. corrupt header), attempt emergency recovery
     if duration == 0:
@@ -1142,7 +1142,7 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.12.2") 
+    print(f"Eventogrammer, version 6.12.3") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
     print(f"* Media player added to plotly graph. ")   
@@ -1179,7 +1179,7 @@ if __name__ == '__main__':
     print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
-    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : prefer their apt versions")
+    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : do check these against their apt versions")
     
     print("* If: 'LibsndfileError: File contains data in an unimplemented format', then 'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
 
