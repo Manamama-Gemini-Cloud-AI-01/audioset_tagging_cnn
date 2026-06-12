@@ -279,8 +279,8 @@ def audio_tagging(args):
 
 def sound_event_detection(args):
     # --- PHASE 0: Setup & Environment ---
-    output_fps = args.output_fps
-    viz_fps = args.vis_fps  # Fixed constant for internal resolution
+    video_fps = args.video_fps
+    ui_fps = args.ui_fps  # Fixed constant for internal resolution
     adaptive_lookahead = args.adaptive_lookahead
     
     sample_rate = args.sample_rate
@@ -340,7 +340,7 @@ def sound_event_detection(args):
     h5_path = os.path.join(output_dir, 'full_event_log.h5')
     
     # Efficiently probe all metadata once
-    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
+    duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
     if duration is None: return # Error already printed in probe
 
     # Define requested video outputs
@@ -386,9 +386,9 @@ def sound_event_detection(args):
     sf_formats = sf.available_formats()
     has_mp3_support = 'MP3' in sf_formats
     source_ext = os.path.splitext(source_media)[1][1:].upper()
-    duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)    
+    duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)    
     # Always re-encode to CBR MP3 to fix seekability/drift issues
-    print(f"🎬  Re-encoding input to CBR MP3 for seeking stability...")
+    print(f"🎬  Re-encoding input to CBR MP3 for stability of the chunk seeking...")
     temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, '-c:a', 'libmp3lame', '-b:a', '41k', temp_audio_path, '-y'], check=True)
     inference_media = temp_audio_path
@@ -403,7 +403,7 @@ def sound_event_detection(args):
         try:
             subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
             inference_media = mp3_path # Rest of the script uses this recovered file
-            duration, video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
+            duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
@@ -418,11 +418,11 @@ def sound_event_detection(args):
     
     # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
     temp_video_path = None
-    if is_video and r_fps and video_fps:
-        if abs(r_fps - video_fps) > 0.01:
-            print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
+    if is_video and r_fps and probed_video_fps:
+        if abs(r_fps - probed_video_fps) > 0.01:
+            print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{probed_video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
             temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4')
-            target_fps = video_fps if video_fps > 0 else output_fps
+            target_fps = probed_video_fps if probed_video_fps > 0 else video_fps
             # --- FFmpeg Compatibility Note ---
             # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
             # Rationale: '-fps_mode' was introduced in FFmpeg 5.1 (late 2022). 
@@ -457,25 +457,25 @@ def sound_event_detection(args):
 
     # Aesthetic Decoupling: Cap RAM aggregation arrays to ~2500 columns for O(1) memory
     max_vis_cols = 2500
-    potential_vis_frames = int(duration * viz_fps)
-    vis_agg_factor = max(1, int(np.ceil(potential_vis_frames / max_vis_cols)))
+    potential_ui_frames = int(duration * ui_fps)
+    ui_agg_factor = max(1, int(np.ceil(potential_ui_frames / max_vis_cols)))
     
-    # Store the original viz_fps for display, but update viz_fps for internal logic
-    effective_viz_fps = viz_fps / vis_agg_factor
-    vis_downsample = max(1, int(inference_fps / effective_viz_fps))
+    # Store the original ui_fps for display, but update ui_fps for internal logic
+    effective_ui_fps = ui_fps / ui_agg_factor
+    ui_downsample = max(1, int(inference_fps / effective_ui_fps))
 
     # Pre-allocate fixed-size buffers for O(1) memory management
-    num_viz_frames = int(duration * effective_viz_fps) + 1
-    framewise_viz_buffer = np.zeros((num_viz_frames, len(labels)), dtype=np.float32)
-    current_viz_row = 0
+    num_ui_frames = int(duration * effective_ui_fps) + 1
+    framewise_ui_buffer = np.zeros((num_ui_frames, len(labels)), dtype=np.float32)
+    current_ui_row = 0
     stft_vis_list = []
 
     # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
-    if vis_agg_factor > 1:
-        print(f"💡 Aesthetic Decoupling: Aggregating {vis_agg_factor}x into {max_vis_cols} RAM columns.")
+    if ui_agg_factor > 1:
+        print(f"💡 Aesthetic Decoupling: Aggregating {ui_agg_factor}x into {max_vis_cols} RAM columns.")
 
     resampler = None
     if native_sr != sample_rate:
@@ -483,7 +483,7 @@ def sound_event_detection(args):
 
     if not skip_inference:
         # Pre-calculate total rows to enable pre-allocation
-        total_rows_est = int(np.ceil(duration * args.csv_fps))
+        total_rows_est = int(np.ceil(duration * args.log_fps))
         
         # Initialize HDF5 with NO compression during the loop to avoid single-threaded stalls.
         # Pre-allocating the shape prevents expensive resizing during inference.
@@ -508,10 +508,10 @@ def sound_event_detection(args):
         current_row = 0
         chunk_seconds = native_chunk_samples / native_sr
         print(f"DEBUG: Native Chunk Samples={native_chunk_samples}, Native SR={native_sr}, Chunk Seconds={chunk_seconds}")
-        for i in range(0, int(duration), int(chunk_seconds)):
+        for chunk_offset in range(0, int(duration), int(chunk_seconds)):
             # Use torchcodec to get samples in range
-            start_s = float(i)
-            stop_s = float(i + chunk_seconds)
+            start_s = float(chunk_offset)
+            stop_s = float(chunk_offset + chunk_seconds)
             
             # get_samples_played_in_range returns [channels, samples]
             samples = decoder.get_samples_played_in_range(start_seconds=start_s, stop_seconds=stop_s).data
@@ -537,13 +537,13 @@ def sound_event_detection(args):
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
 
             # Step C: Write results to disk (OOM-safe, vectorized streaming to HDF5)
-            chunk_start_time = float(i) # Use loop variable 'i'
-            csv_downsample = max(1, inference_fps // args.csv_fps)
+            chunk_start_time = float(chunk_offset)
+            log_downsample = max(1, inference_fps // args.log_fps)
 
-            downsampled_data = chunk_out[::csv_downsample]
+            downsampled_data = chunk_out[::log_downsample]
             num_rows = downsampled_data.shape[0]
             downsampled_timestamps = np.array([chunk_start_time + (f_idx / inference_fps) 
-                                               for f_idx in range(0, len(chunk_out), csv_downsample)], dtype='float32')
+                                               for f_idx in range(0, len(chunk_out), log_downsample)], dtype='float32')
 
             # Ensure pre-allocation was enough (safety check)
             if current_row + num_rows > h5_dataset.shape[0]:
@@ -557,12 +557,12 @@ def sound_event_detection(args):
             current_row += num_rows
             
             # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
-            for v_row_idx in range(0, len(chunk_out), vis_downsample):
-                vis_slice = chunk_out[v_row_idx : v_row_idx + vis_downsample]
+            for v_row_idx in range(0, len(chunk_out), ui_downsample):
+                vis_slice = chunk_out[v_row_idx : v_row_idx + ui_downsample]
                 if len(vis_slice) > 0:
-                    if current_viz_row < len(framewise_viz_buffer):
-                        framewise_viz_buffer[current_viz_row] = np.max(vis_slice, axis=0)
-                        current_viz_row += 1
+                    if current_ui_row < len(framewise_ui_buffer):
+                        framewise_ui_buffer[current_ui_row] = np.max(vis_slice, axis=0)
+                        current_ui_row += 1
 
             # Step E: STFT for visualization background
             chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
@@ -574,7 +574,7 @@ def sound_event_detection(args):
             ).abs().cpu().numpy()
             
             # Save downsampled STFT to HDF5
-            downsampled_stft = chunk_stft[:, ::vis_downsample].astype('float32')
+            downsampled_stft = chunk_stft[:, ::ui_downsample].astype('float32')
             h5_stft_viz.resize(h5_stft_viz.shape[1] + downsampled_stft.shape[1], axis=1)
             h5_stft_viz[:, -downsampled_stft.shape[1]:] = downsampled_stft
 
@@ -594,30 +594,30 @@ def sound_event_detection(args):
         h5_timestamps.resize(current_row, axis=0)
         
         # Save visualization-specific data to HDF5 for persistent fidelity
-        h5_file.attrs['effective_viz_fps'] = effective_viz_fps
-        h5_file.attrs['vis_agg_factor'] = vis_agg_factor
-        h5_file.create_dataset('framewise_viz', data=framewise_viz_buffer[:current_viz_row], compression='gzip')
+        h5_file.attrs['effective_ui_fps'] = effective_ui_fps
+        h5_file.attrs['ui_agg_factor'] = ui_agg_factor
+        h5_file.create_dataset('framewise_ui', data=framewise_ui_buffer[:current_ui_row], compression='gzip')
         
         h5_file.close()
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
     if not skip_inference:
         # Use only the filled portion of the pre-allocated buffer
-        framewise_output = framewise_viz_buffer[:current_viz_row]
+        framewise_output = framewise_ui_buffer[:current_ui_row]
         stft = h5py.File(h5_path, 'r')['stft_viz'][:] # Load from HDF5 instead
-        del framewise_viz_buffer
+        del framewise_ui_buffer
     elif skip_inference:
         # Load data from HDF5 if inference was skipped
         with h5py.File(h5_path, 'r') as hf:
             # Restore the exact visualization parameters used during the original run
-            if 'effective_viz_fps' in hf.attrs:
-                effective_viz_fps = hf.attrs['effective_viz_fps']
-            if 'vis_agg_factor' in hf.attrs:
-                vis_agg_factor = hf.attrs['vis_agg_factor']
+            if 'effective_ui_fps' in hf.attrs:
+                effective_ui_fps = hf.attrs['effective_ui_fps']
+            if 'ui_agg_factor' in hf.attrs:
+                ui_agg_factor = hf.attrs['ui_agg_factor']
             
             # Load the visualization-resolution data instead of the analysis-resolution data
-            if 'framewise_viz' in hf:
-                framewise_output = hf['framewise_viz'][:]
+            if 'framewise_ui' in hf:
+                framewise_output = hf['framewise_ui'][:]
             else:
                 # Fallback for legacy HDF5 files
                 framewise_output = hf['framewise_output'][:]
@@ -632,9 +632,9 @@ def sound_event_detection(args):
 
     # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
     frames_num = len(framewise_output)
-    duration = frames_num / effective_viz_fps
+    duration = frames_num / effective_ui_fps
     
-    print(f'Aggregation complete. Internal Viz resolution: \033[1;34m{effective_viz_fps:.4f} Hz (Data Frames)\033[1;0m')
+    print(f'Aggregation complete. Internal UI resolution: \033[1;34m{effective_ui_fps:.4f} Hz (Data Frames)\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
     # --- PHASE 9: Static Eventogram Generation (PNG) ---
@@ -663,9 +663,9 @@ def sound_event_detection(args):
     axs[1].matshow(top_result_mat.T, origin='upper', aspect='auto', cmap='jet', vmin=0, vmax=1)
 
     tick_interval = max(5, int(duration / 20))
-    x_ticks = np.arange(0, frames_num, effective_viz_fps * tick_interval)
+    x_ticks = np.arange(0, frames_num, effective_ui_fps * tick_interval)
     axs[1].xaxis.set_ticks(x_ticks)
-    axs[1].xaxis.set_ticklabels([int(t / effective_viz_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
+    axs[1].xaxis.set_ticklabels([int(t / effective_ui_fps) for t in x_ticks], rotation=45, ha='right', fontsize=10)
     axs[1].set_xlim(0, frames_num); axs[1].set_yticks(np.arange(0, top_k)); axs[1].set_yticklabels(top_labels, fontsize=14)
     axs[1].yaxis.grid(color='k', linestyle='solid', linewidth=0.3, alpha=0.3)
     axs[1].set_xlabel('Seconds', fontsize=14); axs[1].xaxis.set_ticks_position('bottom')
@@ -681,7 +681,7 @@ def sound_event_detection(args):
     popularity = np.sum(framewise_output, axis=0)
     top_50_indices = np.argsort(popularity)[::-1][:50]
 
-    times = [round(i / effective_viz_fps, 2) for i in range(frames_num)]
+    times = [round(i / effective_ui_fps, 2) for i in range(frames_num)]
     traces_data = []
     for idx in top_50_indices:
         traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
@@ -895,12 +895,12 @@ def sound_event_detection(args):
 
     # --- PHASE 13: Video Rendering Pipeline (Data-Synchronous & Cached) ---
     if args.dynamic_eventogram or args.static_eventogram:
-        print(f"🎞  Initializing video rendering pipeline ({output_fps} FPS)…")
+        print(f"🎞  Initializing video rendering pipeline ({video_fps} FPS)…")
         
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
         if args.dynamic_eventogram:
             output_video_path = os.path.join(output_dir, f"{base_name}{tag_suffix}_eventogram_dynamic.mp4")
-            window_frames = int(args.window_duration * effective_viz_fps)
+            window_frames = int(args.window_duration * effective_ui_fps)
             half_window = window_frames // 2 
 
             # PRECOMPUTE: Map every data point to its local acoustic window (once per run)
@@ -912,8 +912,8 @@ def sound_event_detection(args):
                 # Adaptive logic: Try to center the window on acoustic "peaks" rather than strict time
                 if args.use_adaptive_window:
                     kl_threshold = 0.5
-                    lookahead_f = int(adaptive_lookahead * effective_viz_fps)
-                    for offset in range(half_window, half_window + lookahead_f, int(max(1, effective_viz_fps))):
+                    lookahead_f = int(adaptive_lookahead * effective_ui_fps)
+                    for offset in range(half_window, half_window + lookahead_f, int(max(1, effective_ui_fps))):
                         if start_f - offset >= 0:
                             prev_p = np.mean(framewise_output[start_f-offset:start_f], axis=0)
                             curr_p = np.mean(framewise_output[start_f:start_f+offset], axis=0)
@@ -953,7 +953,7 @@ def sound_event_detection(args):
                 """High-speed redraw using set_data instead of creating new plots."""
                 data = precomputed_data[i]
                 s_f, e_f = data['start'], data['end']
-                t_start, t_end, t_curr = s_f / effective_viz_fps, e_f / effective_viz_fps, i / effective_viz_fps
+                t_start, t_end, t_curr = s_f / effective_ui_fps, e_f / effective_ui_fps, i / effective_ui_fps
                 
                 im_spec.set_data(stft_log[:, s_f:e_f]); im_spec.set_extent([t_start, t_end, 0, stft.shape[0]])
                 im_event.set_data(data['out'].T); im_event.set_extent([t_start, t_end, 0, top_k])
@@ -992,7 +992,7 @@ def sound_event_detection(args):
         frame_cache = {"last_i": -1, "last_img": None}
 
         def make_frame(t):
-            i = min(int(t * effective_viz_fps), frames_num - 1)
+            i = min(int(t * effective_ui_fps), frames_num - 1)
             if i == frame_cache["last_i"]: return frame_cache["last_img"]
             
             img = draw_strategy(i)
@@ -1009,14 +1009,14 @@ def sound_event_detection(args):
         v_w, v_h = v_w // 2 * 2, v_h // 2 * 2
         
         # Final Compositing & Export (Direct FFmpeg Pipe - Zero Temp Files)
-        total_output_frames = int(duration * output_fps)
+        total_output_frames = int(duration * video_fps)
         
         # FFmpeg setup: Pipe 0 is raw video frames; Input 1 is the original audio
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{v_w}x{v_h}",
-            "-pix_fmt", "rgb24", "-r", str(output_fps),
+            "-pix_fmt", "rgb24", "-r", str(video_fps),
             "-i", "pipe:0",          # Raw frames from Python
             "-i", inference_media,   # Audio from source
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
@@ -1030,7 +1030,7 @@ def sound_event_detection(args):
 
         try:
             for frame_idx in range(total_output_frames):
-                t = frame_idx / output_fps
+                t = frame_idx / video_fps
                 frame = make_frame(t)
                 
                 # Surgical Crop: Ensure buffer matches the 'even' dimensions promised to FFmpeg
@@ -1039,7 +1039,7 @@ def sound_event_detection(args):
                 
                 ffmpeg_proc.stdin.write(frame.astype(np.uint8).tobytes())
                 
-                if frame_idx % (output_fps * 10) == 0:
+                if frame_idx % (video_fps * 10) == 0:
                     percent = (frame_idx / total_output_frames) * 100
                     print(f"   Progress: {percent:.1f}% ({t:.0f}s / {duration:.0f}s)", end="\r")
             
@@ -1132,13 +1132,13 @@ if __name__ == '__main__':
                         help='Duration of sliding window for the dynamic eventogram (in seconds)')
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
-    parser.add_argument('--csv_fps', type=int, default=5,
-                        help='Data frames per second (Hz) to write to full_event_log.csv. '
+    parser.add_argument('--log_fps', type=int, default=5,
+                        help='Data frames per second (Hz) to write to full_event_log.h5. '
                              'Use 100 for full resolution (very large file). '
                              '5 is enough for Shapash + outlier detection.')
-    parser.add_argument('--vis_fps', type=int, default=5,
+    parser.add_argument('--ui_fps', type=int, default=5,
                         help='Data frames per second (Hz) for internal RAM-based visualization data (RAM guard)')
-    parser.add_argument('--output_fps', type=int, default=30,
+    parser.add_argument('--video_fps', type=int, default=30,
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
                         help='Max seconds to look ahead/back for acoustic boundaries in adaptive mode')
@@ -1161,12 +1161,12 @@ if __name__ == '__main__':
     print(f"* H5py used instead of CSV to save disk space.")
     print(f"* We convert all files to MP3")
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
-    print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. However they did cause plotly problems, see above.")
+    print(f"* Constants Promoted: ui_fps, video_fps, and adaptive_lookahead are now CLI arguments.")
     print()
 
     print(f"Note on the models:")   
     print(f"* Cnn14_DecisionLevelMax (Sound Event Detection): Uses Decision-level pooling to maintain")
-    print(f"  time resolution. Essential for generating Eventograms and high-res CSV logs.")
+    print(f"  time resolution. Essential for generating Eventograms and high-res HDF5 logs.")
     print(f"* Other models: Best for global audio tagging (use the '--audio_tagging' mode).")
     print()
 
