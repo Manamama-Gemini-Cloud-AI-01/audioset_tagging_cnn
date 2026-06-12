@@ -542,8 +542,8 @@ def sound_event_detection(args):
 
             downsampled_data = chunk_out[::csv_downsample]
             num_rows = downsampled_data.shape[0]
-            downsampled_timestamps = np.array([chunk_start_time + (i / inference_fps) 
-                                               for i in range(0, len(chunk_out), csv_downsample)], dtype='float32')
+            downsampled_timestamps = np.array([chunk_start_time + (f_idx / inference_fps) 
+                                               for f_idx in range(0, len(chunk_out), csv_downsample)], dtype='float32')
 
             # Ensure pre-allocation was enough (safety check)
             if current_row + num_rows > h5_dataset.shape[0]:
@@ -557,8 +557,8 @@ def sound_event_detection(args):
             current_row += num_rows
             
             # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
-            for i in range(0, len(chunk_out), vis_downsample):
-                vis_slice = chunk_out[i : i + vis_downsample]
+            for v_row_idx in range(0, len(chunk_out), vis_downsample):
+                vis_slice = chunk_out[v_row_idx : v_row_idx + vis_downsample]
                 if len(vis_slice) > 0:
                     if current_viz_row < len(framewise_viz_buffer):
                         framewise_viz_buffer[current_viz_row] = np.max(vis_slice, axis=0)
@@ -592,6 +592,12 @@ def sound_event_detection(args):
         # Trim dataset to final size
         h5_dataset.resize(current_row, axis=0)
         h5_timestamps.resize(current_row, axis=0)
+        
+        # Save visualization-specific data to HDF5 for persistent fidelity
+        h5_file.attrs['effective_viz_fps'] = effective_viz_fps
+        h5_file.attrs['vis_agg_factor'] = vis_agg_factor
+        h5_file.create_dataset('framewise_viz', data=framewise_viz_buffer[:current_viz_row], compression='gzip')
+        
         h5_file.close()
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
@@ -603,7 +609,18 @@ def sound_event_detection(args):
     elif skip_inference:
         # Load data from HDF5 if inference was skipped
         with h5py.File(h5_path, 'r') as hf:
-            framewise_output = hf['framewise_output'][:]
+            # Restore the exact visualization parameters used during the original run
+            if 'effective_viz_fps' in hf.attrs:
+                effective_viz_fps = hf.attrs['effective_viz_fps']
+            if 'vis_agg_factor' in hf.attrs:
+                vis_agg_factor = hf.attrs['vis_agg_factor']
+            
+            # Load the visualization-resolution data instead of the analysis-resolution data
+            if 'framewise_viz' in hf:
+                framewise_output = hf['framewise_viz'][:]
+            else:
+                # Fallback for legacy HDF5 files
+                framewise_output = hf['framewise_output'][:]
             stft = hf['stft_viz'][:]
     else:
         print("Error: Inference returned no data. Check input file or model.")
@@ -656,8 +673,99 @@ def sound_event_detection(args):
     plt.savefig(fig_path, bbox_inches='tight', pad_inches=0); plt.close(fig)
     print(f'Saved eventogram PNG to: \033[1;34m{fig_path}\033[1;0m')
 
+    # --- PHASE 12: Interactive Plotly Dashboard (Top 50 Events) ---
+    print("📊  Generating interactive Plotly dashboard…")
+    html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
 
+    # Identify top 50 classes by total popularity
+    popularity = np.sum(framewise_output, axis=0)
+    top_50_indices = np.argsort(popularity)[::-1][:50]
 
+    times = [round(i / effective_viz_fps, 2) for i in range(frames_num)]
+    traces_data = []
+    for idx in top_50_indices:
+        traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
+
+    # Build tick labels — timedelta gives "H:MM:SS" for <24h
+    max_time = max(times) if times else 0
+    tick_interval = max(30, int(max_time / 20))
+    tick_vals = list(range(0, int(max_time) + tick_interval, tick_interval))
+    tick_text = [str(datetime.timedelta(seconds=v)) for v in tick_vals]
+
+    json_payload = json.dumps({
+        "times": times,
+        "traces": traces_data,
+        "tick_vals": tick_vals,
+        "tick_text": tick_text
+    })
+    plotly_js = pyo.get_plotlyjs()
+    # Calculate relative path from the output HTML to the source media for portability
+    rel_audio_path = os.path.relpath(audio_path, output_dir)
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <title>Audio Analysis - {base_name}</title>
+    <script type="text/javascript">{plotly_js}</script>
+    <style>
+        body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; box-sizing: border-box; }}
+        #plot {{ width: 100%; height: 50vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
+        .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
+        code {{ background: #eee; padding: 2px 5px; border-radius: 4px; }}
+        #mediaPlayer {{ width: 100%; max-width: 100%; display: block; box-sizing: border-box; }}
+    </style>
+    </head>
+    <body>
+    <div class="header">
+        <h1>Sound Event Analysis: {base_name}</h1>
+        <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.h5</code></p>
+    </div>
+    <video controls id="mediaPlayer" src="{rel_audio_path}"></video>
+    <div id="plot"></div>
+    <div class="header">
+        <h2>Static Eventogram Comparison</h2>
+        <p>Reference PNG generated by Matplotlib:</p>
+    </div>
+    <img src="eventogram.png" style="width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;">
+    <script type="text/javascript">
+        const data = {json_payload};
+        const traces = data.traces.map((t, index) => ({{
+            x: data.times, y: t.y, name: t.name, mode: 'lines',
+            visible: index < 10 ? true : 'legendonly', line: {{ width: 2 }}
+        }}));
+        Plotly.newPlot('plot', traces, {{
+            title: 'Top 50 Sound Events Momentum',
+            xaxis: {{
+                title: 'Time (MM:SS)',
+                tickvals: data.tick_vals,
+                ticktext: data.tick_text,
+                hoverformat: '.1f',
+                gridcolor: '#eee'
+            }},
+            yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
+            legend: {{ orientation: 'h', y: -0.2 }},
+            hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            margin: {{ t: 50, b: 100, l: 60, r: 20 }}
+        }}, {{ responsive: true }});
+
+        const mediaPlayer = document.getElementById('mediaPlayer');
+        if (mediaPlayer) {{
+            document.getElementById('plot').on('plotly_click', function(data){{
+                if(data.points.length > 0) {{
+                    const clickedTime = data.points[0].xaxis.d2l(data.points[0].x);
+                    mediaPlayer.currentTime = clickedTime;
+                    mediaPlayer.play();
+                }}
+            }});
+        }}
+    </script>
+    </body>
+    </html>
+    """
+    with open(html_dashboard_path, 'w', encoding='utf-8') as f: f.write(html_content)
+    print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
 
     # --- PHASE 10: AI-Friendly Summary Generation (Event Block Detection) ---
     print("📊  Generating AI-friendly event summary files…")
@@ -750,7 +858,7 @@ def sound_event_detection(args):
             if prob > ai_threshold:
                 if current_event is None:
                     current_event = {
-                        "start": round(frame_index / effective_viz_fps, 3),
+                        "start": round(float(timestamps[frame_index]), 3),
                         "peak": float(prob), "trace": [float(prob)]
                     }
                 else:
@@ -764,7 +872,7 @@ def sound_event_detection(args):
                 
                 events_derivative[label].append({
                     "start_time": current_event["start"],
-                    "end_time": round(frame_index / effective_viz_fps, 3),
+                    "end_time": round(float(timestamps[frame_index]), 3),
                     "peak_prob": current_event["peak"],
                     "delta_trace": zip_trace(deltas)
                 })
@@ -776,7 +884,7 @@ def sound_event_detection(args):
             for i in range(1, len(tr)): deltas.append(round(tr[i] - tr[i-1], 6))
             events_derivative[label].append({
                 "start_time": current_event["start"],
-                "end_time": round(len(probs_stream) / effective_viz_fps, 3),
+                "end_time": round(float(timestamps[-1]), 3),
                 "peak_prob": current_event["peak"],
                 "delta_trace": zip_trace(deltas)
             })
@@ -784,109 +892,6 @@ def sound_event_detection(args):
     with open(json_ai_path, 'w') as f:
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
     print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
-
-    # --- PHASE 12: Interactive Plotly Dashboard (Top 50 Events) ---
-    print("📊  Generating interactive Plotly dashboard…")
-    html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
-    
-    # Identify top 50 classes by total popularity
-    popularity = np.sum(framewise_output, axis=0)
-    top_50_indices = np.argsort(popularity)[::-1][:50]
-    
-    times = [round(i / effective_viz_fps, 2) for i in range(frames_num)]
-    traces_data = []
-    for idx in top_50_indices:
-        traces_data.append({"name": labels[idx], "y": np.round(framewise_output[:frames_num, idx], 4).tolist()})
-    
-    # Build tick labels — timedelta gives "H:MM:SS" for <24h
-    max_time = max(times) if times else 0
-    tick_interval = max(30, int(max_time / 20))
-    tick_vals = list(range(0, int(max_time) + tick_interval, tick_interval))
-    tick_text = [str(datetime.timedelta(seconds=v)) for v in tick_vals]
-
-    json_payload = json.dumps({
-        "times": times,
-        "traces": traces_data,
-        "tick_vals": tick_vals,
-        "tick_text": tick_text
-    })
-    plotly_js = pyo.get_plotlyjs()
-    
-    html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8" />
-    <title>Audio Analysis - {base_name}</title>
-    <script type="text/javascript">{plotly_js}</script>
-    <style>
-        body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; box-sizing: border-box; }}
-        #plot {{ width: 100%; height: 50vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
-        .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
-        code {{ background: #eee; padding: 2px 5px; border-radius: 4px; }}
-        #mediaPlayer {{ width: 100%; max-width: 100%; display: block; box-sizing: border-box; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Sound Event Analysis: {base_name}</h1>
-        <p>Interactive Plotly Dashboard | Top 50 Classes | Source: <code>full_event_log.h5</code></p>
-    </div>
-    <video controls id="mediaPlayer" src="{audio_path}"></video>
-    <div id="plot"></div>
-    <div class="header">
-        <h2>Static Eventogram Comparison</h2>
-        <p>Reference PNG generated by Matplotlib:</p>
-    </div>
-    <img src="eventogram.png" style="width: 100%; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;">
-    <script type="text/javascript">
-        const data = {json_payload};
-        const traces = data.traces.map((t, index) => ({{
-            x: data.times, y: t.y, name: t.name, mode: 'lines',
-            visible: index < 10 ? true : 'legendonly', line: {{ width: 2 }}
-        }}));
-        Plotly.newPlot('plot', traces, {{
-            title: 'Top 50 Sound Events Momentum',
-            xaxis: {{
-                title: 'Time (MM:SS)',
-                tickvals: data.tick_vals,
-                ticktext: data.tick_text,
-                hoverformat: '.1f',
-                gridcolor: '#eee'
-            }},
-            yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
-            legend: {{ orientation: 'h', y: -0.2 }},
-            hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-            margin: {{ t: 50, b: 100, l: 60, r: 20 }}
-        }}, {{ responsive: true }});
-
-        const mediaPlayer = document.getElementById('mediaPlayer');
-        if (mediaPlayer) {{
-            document.getElementById('plot').on('plotly_click', function(data){{
-                if(data.points.length > 0) {{
-                    const clickedTime = data.points[0].xaxis.d2l(data.points[0].x);
-                    mediaPlayer.currentTime = clickedTime;
-                    mediaPlayer.play();
-                }}
-            }});
-        }}
-    </script>
-</body>
-</html>
-"""
-    with open(html_dashboard_path, 'w', encoding='utf-8') as f: f.write(html_content)
-    print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
-
-    """
-    # Auto-open the dashboard using the system 'open' command
-    try:
-        subprocess.run(['open', html_dashboard_path], check=False)
-    except Exception as e:
-        print(f"Warning: Could not auto-open dashboard: {e}")
-    """
-
-    
-
 
     # --- PHASE 13: Video Rendering Pipeline (Data-Synchronous & Cached) ---
     if args.dynamic_eventogram or args.static_eventogram:
@@ -1148,14 +1153,15 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.12.3") 
+    print(f"Eventogrammer, version 6.13.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
+    print(f"* Plotly graph resolution fixes: the code for plotly graphing moved earlier, to be tested. ")      
     print(f"* Media player added to plotly graph. ")   
     print(f"* H5py used instead of CSV to save disk space.")
     print(f"* We convert all files to MP3")
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
-    print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments.")
+    print(f"* Constants Promoted: vis_fps, output_fps, and adaptive_lookahead are now CLI arguments. However they did cause plotly problems, see above.")
     print()
 
     print(f"Note on the models:")   

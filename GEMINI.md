@@ -180,26 +180,35 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
 
-## 9. Memory-Efficient Architecture (v6.12.3 Update)
+## 9. Memory-Efficient Architecture & Aesthetic Decoupling (v6.12.3 Update)
 
-To handle long-form recordings (e.g., >10 hours) on resource-constrained devices, the inference script uses a multi-layered memory safety strategy.
+To handle long-form recordings (e.g., >10 hours) and ensure high-fidelity visualization, the inference script uses a **Dual-Stream Data Architecture**. This "Aesthetic Decoupling" prevents forensic data settings from distorting visual outputs.
 
-### 1. The "Aggregation Bottleneck" (v6.6.0 Legacy)
-Previously, the script would process 3-minute chunks but keep all high-resolution results in RAM. The results would spike toward 3GB for 30+ minute files.
+### 1. The Dual-Stream Pipeline
+The script maintains two separate data paths to optimize for different goals:
 
-### 2. The "Lean" Solution (Stream and Prune)
-- **Direct Disk Streaming:** High-res (100 FPS) results are written directly to HDF5. 
-- **Internal Downsampling:** Visualization structures are max-pooled to 2-5 FPS for the eventogram and Plotly dashboard.
+*   **The Forensic Stream (HDF5):**
+    *   **Source:** Direct inference output at `csv_fps` (Default 5 Hz, up to 100 Hz).
+    *   **Destination:** `full_event_log.h5`.
+    *   **Purpose:** Scientific record for downstream analysis (Shapash, AI training).
+    *   **Persistence:** High-resolution probability matrices and precise timestamps.
 
-### 3. The "TorchCodec" Engine (v6.12.3)
+*   **The Visual Stream (RAM Buffer & HDF5 `framewise_viz`):**
+    *   **Source:** Max-pooled inference output at `effective_viz_fps` (capped to ~2500 horizontal columns).
+    *   **Destination:** Static Eventogram (PNG) and Interactive Dashboard (Plotly).
+    *   **Purpose:** Smooth, time-aligned visualization for human "Acoustic Archeology."
+    *   **Stability Fix:** This stream is generated *before* Phase 10 reloads high-res data, ensuring the "Staircase/Blockiness" bug (caused by sampling rate mismatches) is eliminated.
+
+### 2. The "TorchCodec" Engine (v6.12.3)
 The project has moved beyond `soundfile` and `torchaudio.load()` for chunked processing.
 - **Surgical Decoding:** We now use `torchcodec.decoders.AudioDecoder` for sample-accurate, O(1) seeking. 
 - **Direct Tensor I/O:** Audio is decoded directly into PyTorch tensors, eliminating the overhead of NumPy conversion and minimizing memory pressure.
 - **Constant Memory Profile:** RAM usage remains flat (approx. 2.4 GB RSS for the WALL-E test case) regardless of the file duration, as only active 3-minute chunks are decoded and processed at a time.
 
-### 4. Reference Leak Prevention
-- **Garbage Collection:** The script explicitly triggers `gc.collect()` and `torch.cuda.empty_cache()` after every 3-minute chunk.
-- **Vectorized Writes:** By pre-allocating HDF5 datasets, we avoid the CPU stalls associated with dynamic resizing and single-threaded compression during the inference loop.
+### 3. HDF5 Persistence & Skip-Inference Path
+Visualization fidelity is now preserved across reruns:
+- **Metadata Persistence:** `effective_viz_fps` and the `framewise_viz` buffer are stored as HDF5 attributes/datasets.
+- **Skip Logic:** When skipping inference, the script reloads the `framewise_viz` stream specifically for Plotly and PNG generation, ensuring identical visual results even if `--csv_fps` was modified between runs.
 
 ## 10. HDF5 Bottleneck Removal (CPU Saturation)
 
@@ -218,6 +227,11 @@ On Android/Termux (aarch64) with the `master` stable branch (CBR MP3 + HDF5 Visu
 - **Throughput:** ~3.2x real-time speed (1.5 hours of audio analyzed in ~26 minutes).
 - **RAM Footprint:** ~3.8 GB Peak RSS (Comfortably within 5.7 GB RAM limit).
 - **Stability:** CBR pre-encoding + HDF5 persistence eliminates decoder-drift and 'libmpg123' sync errors on long-form (1h+) media.
+
+## 12. Plotly Dashboard: The "Staircase" Bug Post-Mortem
+Historically, the interactive Plotly dashboard exhibited "blocky" or "staircase" shaped traces. 
+- **The Cause:** A "State Mismatch" where the Plotly phase was accidentally using high-resolution forensic data (100 Hz) but attempting to plot it against a low-resolution visualization timeline (5 Hz).
+- **The Fix:** Phase 12 (Plotly) was moved to immediately follow Phase 9 (PNG), ensuring it uses the **Aesthetic/Visualization Stream** before any forensic data reloads occur. This ensures organic, smooth, and time-accurate traces.
 
 
 ### 4. Video Rendering Speed Hack (v6.6.3 Update)
@@ -288,6 +302,40 @@ While PANNs excel at identifying the **"Physical Reality"** (e.g., specific inst
 - **Interactive Dashboard Enhancements:** Added "The Acoustic Explorer" functionality. Integrated HTML5 `<video>` player, CSS fixes for full width, and JavaScript for click-to-seek functionality from the Plotly graph.
 - **Documentation:** Updated `docs/auditory_cognition_guide_template.md` to reflect HDF5-based data storage and updated the CLI commands.
 - **Diagnostic Resolution:** Fixed `BrokenPipeError` issues by refining the sanitization process and resolving script-level import conflicts (`UnboundLocalError`).
+
+## 15. Forensic Temporal Resolution & Detection Quality Analysis
+
+As of v6.12.3, a strategic shift was made toward "Stability First" to support 10h+ recordings on mobile devices. However, this has introduced a significant "Fidelity Gap" in sound event detection.
+
+### 1. The Resolution vs. Quality Trade-off
+The PANNs `Cnn14_DecisionLevelMax` model natively operates at **100 Hz** (10ms resolution). 
+
+| Feature | Legacy (v4.x) | Current (v6.12.3) | Forensic Impact |
+| :--- | :--- | :--- | :--- |
+| **Log Resolution** | 100 Hz (Native) | 5 Hz (Default) | **High:** Misses 95% of peak data. |
+| **Visual Resolution** | High/Variable | Capped @ 2500 cols | **Medium:** Blurs transients/rhythms. |
+| **Detection Quality** | High (Surgical) | Degraded (Smoothed) | **Critical:** Peak probabilities are lost. |
+
+### 2. Detection Degradation Mechanisms
+- **Aliasing of Short Events:** Sharp acoustic events (clicks, gunshots, transients) shorter than 200ms are likely skipped by the 5 Hz sampler.
+- **Rhythmic Blurring:** In "Acoustic Archeology," physical signatures (attack/decay) are lost when multiple pulses are merged into a single 5 Hz bin.
+- **Peak Under-representation:** The model might detect a sound at 0.95 probability for 20ms, but if the 5 Hz sampler hits a 0.20 "tail" at the 200ms mark, the event is effectively lost to history.
+
+### 3. Planned A/B/C Quality Testing
+The User will perform a controlled A/B/C test on the `WALL-E_CLIP_COMPILAT.mp4` to quantify the trade-off:
+
+- **Test A (Baseline/Stability):** Current defaults.
+  - `--csv_fps 5 --vis_fps 5`
+  - *Expectation:* Fast execution, low RAM, poor transient detection.
+- **Test B (Forensic/Native):** Full resolution recovery.
+  - `--csv_fps 100 --vis_fps 100`
+  - *Expectation:* Surgical precision, accurate "Acoustic Archeology," larger files.
+- **Test C (Balanced/Hybrid):** Finding the "sweet spot."
+  - `--csv_fps 20 --vis_fps 20`
+  - *Expectation:* Captures 50ms events, moderate resource usage.
+
+### 4. Recommendation for Researchers
+For forensic analysis where the **physicality** of the sound matters more than the label, **always override the defaults** to use `--csv_fps 100`.
 
 ## Branching & Experimental Strategy
 - **`master`**: Contains the stable, "traditional" implementation: HDF5 visualization persistence, mandatory CBR MP3 re-encoding, and `torchcodec`-based sample-accurate chunked decoding.
