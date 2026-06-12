@@ -455,11 +455,9 @@ def sound_event_detection(args):
     chunk_duration = 180  # 3 minutes
     native_chunk_samples = int(chunk_duration * native_sr)
 
-    # Aesthetic Decoupling: Cap RAM aggregation arrays to ~2500 columns for O(1) memory
-    max_vis_cols = 2500
-    potential_ui_frames = int(duration * ui_fps)
-    ui_agg_factor = max(1, int(np.ceil(potential_ui_frames / max_vis_cols)))
-    
+    # Aesthetic Decoupling: Disabled. UI resolution now strictly follows ui_fps.
+    ui_agg_factor = 1
+
     # Store the original ui_fps for display, but update ui_fps for internal logic
     effective_ui_fps = ui_fps / ui_agg_factor
     ui_downsample = max(1, int(inference_fps / effective_ui_fps))
@@ -1134,10 +1132,12 @@ if __name__ == '__main__':
                         help='Use adaptive window size based on the event boundaries')
     parser.add_argument('--log_fps', type=int, default=5,
                         help='Data frames per second (Hz) to write to full_event_log.h5. '
-                             'Use 100 for full resolution (very large file). '
-                             '5 is enough for Shapash + outlier detection.')
+                             'Note: Values > 5 are DECEPTIVE/GIGO as the model (Cnn14_DecisionLevelMax) '
+                             'only "thinks" at ~3.125 Hz native resolution due to internal pooling layers. '
+                             'High values only increase file size with redundant data. RTFM README for details.')
     parser.add_argument('--ui_fps', type=int, default=5,
-                        help='Data frames per second (Hz) for internal RAM-based visualization data (RAM guard)')
+                        help='Data frames per second (Hz) for internal RAM-based visualization data. '
+                             'Note: Subject to the same ~3.125 Hz native resolution bottleneck as log_fps.')
     parser.add_argument('--video_fps', type=int, default=30,
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
