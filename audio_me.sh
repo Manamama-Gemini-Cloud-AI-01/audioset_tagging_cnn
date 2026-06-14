@@ -43,7 +43,7 @@ echo "Input file and parameters: $@"
 echo -e "Add  \033[1;34m--dynamic_eventogram \033[1;0m  or  \033[1;34m--static_eventogram\033[1;0m  for a video of the graph with a moving marker."
 echo 
 
-echo "Note: If you see errors with sox / mp3 parsing, then apt install 'sox' and 'libsox-fmt-mp3', test it via 'sox --info "$@" ' "
+
 echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
 
 #Obsolete by now: 
@@ -53,7 +53,7 @@ cd $HOME/Downloads/GitHub/audioset_tagging_cnn/
 
 
 
-echo "We are checking the real path of the first argument, which may hang if the file be not accessible..."
+echo "We are checking the real path of the first argument, which may hang the script if the file be not accessible..."
 INPUT_FILE=$(realpath "$1")
 
 
@@ -86,16 +86,16 @@ INPUT_DIR=$(dirname "$INPUT_FILE")
 OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
 H5_PATH="${OUTPUT_DIR}/full_event_log.h5"
 
-# Check if --no-shapash is in the arguments
+# Check if --shapash is in the arguments
 SKIP_SHAPASH=false
 for arg in "$@"; do
-    if [[ "$arg" == "--no-shapash" ]]; then
-        SKIP_SHAPASH=true
+    if [[ "$arg" == "--shapash" ]]; then
+        SHAPASH=true
         break
     fi
 done
 
-if [[ "$SKIP_SHAPASH" == true ]]; then
+if [[ "$SHAPASH" == true ]]; then
     echo
     echo "⏭️  Skipping Shapash dashboard launch (--no-shapash specified)."
 elif [[ -f "$H5_PATH" ]]; then
