@@ -87,7 +87,7 @@ OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_taggi
 H5_PATH="${OUTPUT_DIR}/full_event_log.h5"
 
 # Check if --shapash is in the arguments
-SKIP_SHAPASH=false
+SHAPASH=false
 for arg in "$@"; do
     if [[ "$arg" == "--shapash" ]]; then
         SHAPASH=true
