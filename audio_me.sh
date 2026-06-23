@@ -67,6 +67,33 @@ fi
 
 echo 
 
+# ====================== TEMP DIRECTORY SANITY CHECK ======================
+TMPDIR="${TMPDIR:-${TMP:-/tmp}}"
+
+if [[ -d "$TMPDIR" ]]; then
+    # Only check for files *we* create — much less noisy and more relevant
+    OUR_TEMPS=$(find "$TMPDIR" -name 'temp_cbr_*' -o -name 'temp_cfr_*' 2>/dev/null)
+    
+    if [[ -n "$OUR_TEMPS" ]]; then
+        echo -e "\033[1;33m⚠️  WARNING: Old temporary files from previous runs detected\033[0m"
+        echo "in $TMPDIR"
+        echo
+        echo "$OUR_TEMPS"
+        echo
+        echo "These can cause 'Permission denied' if owned by root (from sudo runs)."
+        echo
+        echo "Recommended fix:"
+        echo "    sudo rm -f \"$TMPDIR\"/temp_cbr_* \"$TMPDIR\"/temp_cfr_*"
+	echo "or chown -R $(whoami)     \"$TMPDIR\" "   
+        echo
+        read -r -p "Press Enter to continue anyway or Ctrl+C to abort... "
+    fi
+fi
+# ====================== END TEMP CHECK ======================
+
+
+
+
 
 # Run inference
 
@@ -78,9 +105,13 @@ $PREFIX/bin/time -v python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch
 
 # --- STREAMLINING: Auto-launch Shapash Dashboard ---
 
-INPUT_FILENAME=$(basename "$INPUT_FILE" | sed 's/\.[^.]*$//')
-CHECKPOINT_FILENAME=$(basename "$CHECKPOINT_PATH")
+# --- Optional Shapash Dashboard ---
 INPUT_DIR=$(dirname "$INPUT_FILE")
+CHECKPOINT_FILENAME=$(basename "$CHECKPOINT_PATH")
+OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
+H5_PATH="${OUTPUT_DIR}/full_event_log.h5"
+
+
 
 # Reconstruct the output directory path (must match Python logic)
 OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
