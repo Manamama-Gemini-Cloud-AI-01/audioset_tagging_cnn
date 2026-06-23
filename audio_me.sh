@@ -49,6 +49,12 @@ fi
 # ====================== TEMP DIRECTORY SANITY CHECK ======================
 TMPDIR="${TMPDIR:-${TMP:-/tmp}}"
 
+
+#We remove the lot silently: 
+
+rm -f "$TMPDIR"/temp_cbr_* "$TMPDIR"/temp_cfr_*
+
+
 if [[ -d "$TMPDIR" ]]; then
     OUR_TEMPS=$(find "$TMPDIR" -name 'temp_cbr_*' -o -name 'temp_cfr_*' 2>/dev/null)
     
