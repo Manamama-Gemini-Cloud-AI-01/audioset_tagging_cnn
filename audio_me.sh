@@ -96,9 +96,9 @@ for arg in "$@"; do
 done
 
 if [[ "$SHAPASH" == true ]]; then
-    echo
-    echo "⏭️  Skipping Shapash dashboard launch (--no-shapash specified)."
-elif [[ -f "$H5_PATH" ]]; then
+    #echo
+    #echo "⏭️  Skipping Shapash dashboard launch (--no-shapash specified)."
+if [[ -f "$H5_PATH" ]]; then
     echo
     echo "📊  Launching Unified Shapash Dashboard..."
     echo "Note: This dashboard explains the Top 50 sounds detected."
@@ -110,6 +110,6 @@ else
     echo
     echo "⚠️  Warning: full_event_log.h5 not found at $H5_PATH. Skipping dashboard."
 fi
-
+fi
 
 echo
