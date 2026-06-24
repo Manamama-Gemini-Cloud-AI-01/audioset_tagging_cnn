@@ -319,20 +319,6 @@ def sound_event_detection(args):
     output_dir = os.path.join(audio_dir, f'{base_name}_{checkpoint_name}_audioset_tagging_cnn')
     create_folder(output_dir)
 
-    # --- PHASE 1: Dependency Injection (AI Guide) ---
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'auditory_cognition_guide_template.md'))
-        guide_dest_path = os.path.join(output_dir, 'auditory_cognition_guide_template.md')
-        
-        if os.path.exists(guide_src_path):
-            shutil.copy(guide_src_path, guide_dest_path)
-            print(f'Copied AI analysis guide to: \033[1;34m{guide_dest_path}\033[1;0m')
-        else:
-            print(f'\033[1;33mWarning: AI analysis guide not found at {guide_src_path}\033[0m')
-    except Exception as e:
-        print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
-
     tag_suffix = "_audioset_tagging_cnn"
     fig_path = os.path.join(output_dir, 'eventogram.png')
 
@@ -597,6 +583,18 @@ def sound_event_detection(args):
         h5_file.create_dataset('framewise_ui', data=framewise_ui_buffer[:current_ui_row], compression='gzip')
         
         h5_file.close()
+
+        # --- RE-POSITIONED: AI Guide Copy (Post-Inference) ---
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            guide_src_path = os.path.normpath(os.path.join(script_dir, '..', 'docs', 'auditory_cognition_guide_template.md'))
+            guide_dest_path = os.path.join(output_dir, 'auditory_cognition_guide_template.md')
+            
+            if os.path.exists(guide_src_path):
+                shutil.copy(guide_src_path, guide_dest_path)
+                print(f'Copied AI analysis guide to: \033[1;34m{guide_dest_path}\033[1;0m')
+        except Exception as e:
+            print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
     if not skip_inference:
