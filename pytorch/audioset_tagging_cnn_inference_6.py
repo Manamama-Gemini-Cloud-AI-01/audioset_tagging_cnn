@@ -1203,7 +1203,7 @@ if __name__ == '__main__':
     print(f"Torch: {torch.__version__ if torch else 'Not Available'}")
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
     # May need to be disabled as it errors if installed some weird version 0 dev.
-    print(f"Torchcodec: {torchcodec.__version__ if torchcodec else 'Not Available'}")
+    print(f"Torchcodec: {getattr(torchcodec, '__version__', 'Unknown') if torchcodec else 'Not Available'}")
  
     print()
 
