@@ -1193,7 +1193,7 @@ if __name__ == '__main__':
     print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
-    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : do check these against their apt versions")
+    print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : do check these against their apt versions. For anything torch or torchcodec related: sudo apt install libpython3.* to avoid .so file linkage problems")
     
     print("* If: 'LibsndfileError: File contains data in an unimplemented format', then 'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
 
@@ -1202,8 +1202,8 @@ if __name__ == '__main__':
     print(f"Dependency Versions:")
     print(f"Torch: {torch.__version__ if torch else 'Not Available'}")
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
-    # May need to be disabled as it errors if installed some weird version 0 dev.
-    print(f"Torchcodec: {getattr(torchcodec, '__version__', 'Unknown') if torchcodec else 'Not Available'}")
+    # Often errors, unless  sudo apt install libpython3.* to avoid .so file linkage problems:
+    print(f"Torchcodec: {getattr(torchcodec, '__version__', 'Unknown') if torchcodec else 'Error checking version, so do read the tips above!'}")
  
     print()
 
