@@ -1,1 +1,5 @@
-time sudo python /data/data/com.termux/files/home/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py --model_type=Cnn14_DecisionLevelMax --checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth --cuda "/data/media/0/Android/data/com.dimowner.audiorecorder/files/Music/records/2026-06-22 09.11.58_1.m4a"
+##See: ~//Downloads/GitHub/Ubuntu_Scripts_1/utils/com.dimowner.audiorecorder_monitor.sh
+
+#Do not use sudo: 
+
+#time sudo python /data/data/com.termux/files/home/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py --model_type=Cnn14_DecisionLevelMax --checkpoint_path=Cnn14_DecisionLevelMax_mAP=0.385.pth --cuda "/data/media/0/Android/data/com.dimowner.audiorecorder/files/Music/records/2026-06-22 09.11.58_1.m4a"
