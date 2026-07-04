@@ -416,3 +416,11 @@ Tips & Environment Hacks:
 * All input audio files are now automatically re-encoded to CBR MP3 to ensure consistent seekability and prevent decoder drift issues.
 * If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:
   Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)
+
+## 16. Termux Environment Incompatibility (July 2026)
+
+- **Issue:** The upgrade to Python 3.14.6 in Termux has created a dependency deadlock for the `audioset_tagging_cnn` inference stack.
+- **Symptom:** `numba` fails with `ValueError: unknown attr 'captures(none)'` in `llvmlite` and C++ compilation failures (`undeclared identifier 'call_cfunc'`) in `numba/_dispatcher.cpp` during source builds.
+- **Root Cause:** Deep ABI incompatibility between the Termux-provided `apt` packages (which seem to be pinned to older CPython/LLVM APIs) and the CPython 3.14 interpreter.
+- **Current Status:** Incompatible. Even patching Numba from source (cloned git repo) to bypass version guards fails due to structural changes in the Python 3.14 C-API.
+- **Recommendation:** Use a `venv` with a supported Python version (3.13) or run within a Debian Proot environment to maintain binary compatibility.
