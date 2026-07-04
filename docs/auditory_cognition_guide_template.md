@@ -64,33 +64,33 @@ Start here. These files don't require querying a server. They're the ground trut
 
 When simple tools like `grep` fail—especially for events with low probability or missing from summary files—use structured code to query the raw data directly.
 
-#### 1. Forensic Strategy: The "Long Tail" Weak Signal Detection
+#### 1. Forensic Strategy: The "Concept Bridge" (Semantic Discovery)
 
-When searching for conceptually related classes (e.g., all forms of "laughter" including "snicker" or "chuckle"), **do not hardcode indices**. Use dynamic regex-based discovery to ensure you catch the full semantic family.
+Brittle substring search (e.g., searching for "calling") will fail to capture the semantic reality of a sound event (e.g., a phone call is composed of "Telephone dialing," "Ringing," and "Speech"). 
 
-**Python script for `full_event_log.h5`:**
+**The Methodology:**
+
+1.  **Define the Concept Bridge:** Map your natural language intent to a cluster of regex patterns covering the **full acoustic signature** of the event.
+2.  **Aggregate:** Perform your forensic analysis (thresholding/timestamping) on the **union** of these classes.
+
+**Concept Bridge Python Implementation:**
 
 ```python
-import h5py
-import pandas as pd
-import numpy as np
+# Semantic Bridge: Mapping intent to regex clusters
+CONCEPT_BRIDGE = {
+    'someone_calling_someone': [r'telephone', r'dial', r'ring', r'speech'],
+    'crickets': [r'cricket']
+}
 
-# 1. Dynamically find all classes in the semantic family
-labels_df = pd.read_csv("class_labels_indices.csv")
-# Regex for comprehensive discovery (e.g., 'laughter' | 'snicker')
-mask = labels_df['display_name'].str.contains(r'laughter|snicker', case=False, na=False)
-target_indices = labels_df[mask].index.tolist()
-
-# 2. Analyze weak signals with low thresholds
-THRESHOLD = 0.0005 
-
-with h5py.File("full_event_log.h5", 'r') as f:
-    data = f['framewise_output'][:]
-    for idx in target_indices:
-        probs = data[:, idx]
-        # Detecting 'whispers' of signal
-        print(f"Class: {labels_df.loc[idx, 'display_name']} | Frames > {THRESHOLD}: {np.sum(probs > THRESHOLD)}")
+def get_target_classes(intent):
+    patterns = CONCEPT_BRIDGE.get(intent, [intent])
+    regex = '|'.join(patterns)
+    labels_df = pd.read_csv("class_labels_indices.csv")
+    mask = labels_df['display_name'].str.contains(regex, case=False, na=False)
+    return labels_df[mask].index.tolist()
 ```
+
+By querying the **entire semantic family**, you bypass the "long-tail" trap of individual brittle class labels.
 
 **Using `jq` for `detailed_events_delta_ai_attention_friendly.json`:**
 
