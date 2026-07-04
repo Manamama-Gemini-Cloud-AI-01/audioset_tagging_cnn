@@ -64,24 +64,32 @@ Start here. These files don't require querying a server. They're the ground trut
 
 When simple tools like `grep` fail—especially for events with low probability or missing from summary files—use structured code to query the raw data directly.
 
-**Using Python for `full_event_log.h5`:**
+#### 1. Forensic Strategy: The "Long Tail" Weak Signal Detection
+
+When searching for conceptually related classes (e.g., all forms of "laughter" including "snicker" or "chuckle"), **do not hardcode indices**. Use dynamic regex-based discovery to ensure you catch the full semantic family.
+
+**Python script for `full_event_log.h5`:**
 
 ```python
 import h5py
 import pandas as pd
 import numpy as np
 
-# Load h5 and class labels
-h5_path = "path/to/full_event_log.h5"
+# 1. Dynamically find all classes in the semantic family
 labels_df = pd.read_csv("class_labels_indices.csv")
+# Regex for comprehensive discovery (e.g., 'laughter' | 'snicker')
+mask = labels_df['display_name'].str.contains(r'laughter|snicker', case=False, na=False)
+target_indices = labels_df[mask].index.tolist()
 
-# Identify class index (e.g., Laughter)
-idx = labels_df[labels_df['display_name'].str.contains('Laughter', case=False)].index[0]
+# 2. Analyze weak signals with low thresholds
+THRESHOLD = 0.0005 
 
-with h5py.File(h5_path, 'r') as f:
-    probs = f['framewise_output'][:, idx]
-    # Analyze occurrences above threshold
-    print(f"Frames with prob > 0.01: {np.sum(probs > 0.01)}")
+with h5py.File("full_event_log.h5", 'r') as f:
+    data = f['framewise_output'][:]
+    for idx in target_indices:
+        probs = data[:, idx]
+        # Detecting 'whispers' of signal
+        print(f"Class: {labels_df.loc[idx, 'display_name']} | Frames > {THRESHOLD}: {np.sum(probs > THRESHOLD)}")
 ```
 
 **Using `jq` for `detailed_events_delta_ai_attention_friendly.json`:**
