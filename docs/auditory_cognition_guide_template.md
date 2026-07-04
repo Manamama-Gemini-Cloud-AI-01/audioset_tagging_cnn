@@ -58,31 +58,47 @@ Start here. These files don't require querying a server. They're the ground trut
 
 **Critical insight:** This file is structured as an HDF5 database, not a spreadsheet. You'll query it using the same logic as the Shapash server or by loading specific datasets into memory via `h5py`.
 
-### Detailed Delta JSON (Attack/Decay Signatures)
+### Structured Data Analysis (Using Python/JSON)
 
-**File:** `detailed_events_delta_ai_attention_friendly.json`
+**For Deep-Dive Forensic Inspection:**
 
-**What to do:** Treat this as the "acoustic skeleton" of the eventogram.
+When simple tools like `grep` fail—especially for events with low probability or missing from summary files—use structured code to query the raw data directly.
 
-**Structure:**
+**Using Python for `full_event_log.h5`:**
 
-```json
-{
-  "Speech": [
-    {"start": 0.5, "end": 2.3, "delta": 0.15},
-    {"skip": 5},
-    {"start": 8.2, "end": 10.1, "delta": -0.12}
-  ]
-}
+```python
+import h5py
+import pandas as pd
+import numpy as np
+
+# Load h5 and class labels
+h5_path = "path/to/full_event_log.h5"
+labels_df = pd.read_csv("class_labels_indices.csv")
+
+# Identify class index (e.g., Laughter)
+idx = labels_df[labels_df['display_name'].str.contains('Laughter', case=False)].index[0]
+
+with h5py.File(h5_path, 'r') as f:
+    probs = f['framewise_output'][:, idx]
+    # Analyze occurrences above threshold
+    print(f"Frames with prob > 0.01: {np.sum(probs > 0.01)}")
 ```
 
-**What it tells you:**
+**Using `jq` for `detailed_events_delta_ai_attention_friendly.json`:**
 
-- `delta > 0`: Probability is increasing (attack phase).
-- `delta < 0`: Probability is decreasing (decay phase).
-- `skip: N`: Probability is steady for N frames.
+Instead of `grep`, use `jq` to traverse the JSON structure.
 
-**Why this matters:** When the Shapash server shows you a SHAP explanation, cross-check the deltas. Do they match the detected acoustic signature? If not, the model is hallucinating.
+**Example: Finding occurrences of a specific sound class:**
+```bash
+# Verify if a sound class exists in the keys
+jq 'keys' detailed_events_delta_ai_attention_friendly.json
+
+# Extract events for a class (e.g., "Speech")
+jq '.Speech' detailed_events_delta_ai_attention_friendly.json
+
+# Filter for events with high probability delta
+jq '.Speech[] | select(.delta > 0.1)' detailed_events_delta_ai_attention_friendly.json
+```
 
 ### Model Personality (Known Quirks)
 
