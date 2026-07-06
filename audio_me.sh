@@ -76,12 +76,29 @@ if [[ -d "$TMPDIR" ]]; then
 fi
 # ====================== END TEMP CHECK ======================
 
-# Run inference
+# ====================== ARGUMENT FILTERING & PATH STABILIZATION ======================
+PY_ARGS=()
+SHAPASH=false
+
+# 1. Stabilize the input path: Seed the Python arguments with the absolute resolved path
+PY_ARGS+=("$INPUT_FILE")
+
+# 2. Filter subsequent arguments to trap custom launcher flags
+for arg in "${@:2}"; do
+    if [[ "$arg" == "--shapash" ]]; then
+        SHAPASH=true
+    else
+        PY_ARGS+=("$arg")
+    fi
+done
+# =====================================================================================
+
+# Run inference with our pristine, filtered parameters
 $PREFIX/bin/time -v python  "$HOME/Downloads/GitHub/audioset_tagging_cnn/pytorch/audioset_tagging_cnn_inference_6.py" \
     --model_type="$MODEL_TYPE" \
     --checkpoint_path="$CHECKPOINT_PATH" \
     --cuda \
-    "$@"    
+    "${PY_ARGS[@]}"    
 
 # --- STREAMLINING: Auto-launch Shapash Dashboard ---
 INPUT_FILENAME=$(basename "$INPUT_FILE")
@@ -92,15 +109,6 @@ CHECKPOINT_FILENAME=$(basename "$CHECKPOINT_PATH")
 
 OUTPUT_DIR="${INPUT_DIR}/${INPUT_FILENAME}_${CHECKPOINT_FILENAME}_audioset_tagging_cnn"
 H5_PATH="${OUTPUT_DIR}/full_event_log.h5"
-
-# Check if --shapash is in the arguments
-SHAPASH=false
-for arg in "$@"; do
-    if [[ "$arg" == "--shapash" ]]; then
-        SHAPASH=true
-        break
-    fi
-done
 
 if [[ "$SHAPASH" == true ]]; then
     echo
