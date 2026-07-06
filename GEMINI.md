@@ -76,7 +76,26 @@ Located at `scripts/Shapash_visualization/launch_correlations_dashboard.py`, thi
 **Workflow:**
 
 1. **Step 1 (Inference):** Run `pytorch/audioset_tagging_cnn_inference_6.py` on your audio/video file.
-2. **Step 2 (Visualization):** Run `launch_correlations_dashboard.py` on the resulting `full_event_log.csv`.
+2. **Step 2 (Visualization):** Run `launch_correlations_dashboard.py` on the resulting `full_event_log.h5`.
+
+### 4.1 Forensic Analysis via Shapash Dashboard
+
+The `launch_multi_target_dashboard.py` script provides a deep-dive into acoustic correlations. 
+
+#### The "Classifier Trick" (Custom Bridge)
+To enable the interactive UI, the script employs a sophisticated monkeypatch. Since we use a `RandomForestRegressor` for the acoustic brain, `shapash.SmartExplainer` would normally refuse to render UI components (like the class target dropdown), as it expects a classifier. To bridge this:
+1.  **Monkeypatching:** The script defines a `MultiOutputPredictProba` wrapper and assigns it to `model.predict_proba`.
+2.  **Masquerading:** It assigns a dummy `model.classes_` array to the regressor, allowing it to masquerade as a classifier to the `SmartExplainer` framework.
+3.  **UI Enablement:** This bypass forces `shapash` to generate the interactive target class dropdown, which then drives the entire diagnostic interface.
+
+#### How to Read the Unified Acoustic Brain Dashboard
+The dashboard allows you to interrogate the model's logic for any specific detected sound event.
+
+1.  **Class Dropdown (The Target Selector):** This is the "steering wheel" of the dashboard. When you select a class (e.g., "Laughter"), it triggers the model to explain which of the 527 acoustic features (sounds) were most responsible for pushing that detection probability up or down.
+2.  **Feature Importance (The Recipe):** Displays the top features contributing to the selected class. If unexpected sounds appear here (e.g., "Vacuum" when detecting "Laughter"), investigate for environmental "Semantic Noise."
+3.  **Feature Contribution (The Interaction Curve):** Visualizes the specific relationship between a feature intensity and its impact on the target class. 
+    *   *Positive Slope:* The feature strongly promotes the target sound.
+    *   *Negative Slope:* The feature acts as an inhibitory signal (i.e., when this is loud, the target is unlikely).
 
 ## 5. Model Performance & Personality Analysis
 
