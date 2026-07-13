@@ -29,6 +29,7 @@ echo "Model Type: $MODEL_TYPE"
 echo "Checkpoint path: $CHECKPOINT_PATH"
 echo "Input file and parameters: $@"
 echo -e "Add  \033[1;34m--dynamic_eventogram \033[1;0m  or  \033[1;34m--static_eventogram\033[1;0m  for a video of the graph with a moving marker."
+echo -e "Add  \033[1;34m--shapash \033[1;0m  for a shapash graph correlation analysis at the end (needs breaking code via Control+C then)."
 echo 
 
 echo "Note: Paths provided as command-line arguments should be absolute to avoid ambiguity."
