@@ -33,7 +33,7 @@ try:
     import torchaudio
 except (OSError, ImportError) as e:
     print(f"\033[1;31mERROR: torchaudio and torch are not compatible ({e}). We stop.\033[0m")
-    print("Please synchronize your versions to fix the 'undefined symbol' or import error:")
+    print("Please synchronize your versions to fix the 'undefined symbol' or import error, torchcodec : 'pip index versions torchcodec' or:")
     print("\033[1;32mpip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu\033[0m")
     sys.exit(1)
 
@@ -1203,7 +1203,7 @@ if __name__ == '__main__':
     print("  Run: pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu")
     print("* If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'):")
     print("  Root Cause: CUDA Ghosting. Standard wheels link to NVIDIA libraries.")
-    print("  Fix: 'pip uninstall torchcodec' . Use the --extra-index-url above to force CPU-only binaries: 'pip install --upgrade torchcodec --extra-index-url https://download.pytorch.org/whl/cpu' ")
+    print("  Fix: 'pip uninstall torchcodec' . Use the --extra-index-url above to force CPU-only binaries: 'pip install --upgrade torchcodec --extra-index-url https://download.pytorch.org/whl/cpu'. Or downgrade to match versions, use: 'pip index versions torchcodec' to match. ")
     print("* If you see 'NotImplementedError: sys.platform = android' after an update:")
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
