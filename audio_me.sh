@@ -20,7 +20,9 @@ if [[ ! -f "$CHECKPOINT_PATH" ]]; then
 fi
 
 if [[ ! -f "$CHECKPOINT_PATH" ]]; then
-    echo "ERROR: Checkpoint not found at $CHECKPOINT_PATH"
+    echo "ERROR: Checkpoint not found at $CHECKPOINT_PATH".  Use: 
+    echo ' CHECKPOINT_PATH="Cnn14_DecisionLevelMax_mAP=0.385.pth"
+ get -O $CHECKPOINT_PATH https://zenodo.org/record/3987831/files/Cnn14_DecisionLevelMax_mAP%3D0.385.pth?download=1 ' 
     exit 1
 fi
 
