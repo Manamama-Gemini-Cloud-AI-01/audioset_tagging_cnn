@@ -364,6 +364,7 @@ def sound_event_detection(args):
         try:
             checkpoint = torch.load(checkpoint_path, map_location=device)
             model.load_state_dict(checkpoint['model'])
+            model.to(device)
         except Exception as e:
             print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
             return
@@ -516,6 +517,7 @@ def sound_event_detection(args):
 
             # Step B: Inference
             with torch.no_grad():
+                model.to(device)
                 model.eval()
                 batch_output_dict = model(chunk_waveform, None)
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
