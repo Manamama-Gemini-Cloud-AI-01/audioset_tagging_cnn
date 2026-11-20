@@ -15,11 +15,11 @@ While a live Dash server provides real-time interrogation, compiling the "Acoust
 Use the following command to determine what "makes a sound what it is" (e.g., why the model thinks a window break is a "Splash" or a vocal is "Heavy Metal"):
 
 ```bash
-python3 scripts/Shapash_visualization/launch_correlations_dashboard.py <PATH_TO_CSV> --target "<SOUND_CLASS>"
+python3 scripts/Shapash_visualization/launch_correlations_dashboard.py <PATH_TO_H5> --target "<SOUND_CLASS>"
 ```
 
 ### Parameters:
-- `<PATH_TO_CSV>`: Path to the `full_event_log.csv` artifact.
+- `<PATH_TO_H5>`: Path to the `full_event_log.h5` artifact.
 - `--target`: The specific sound class to explain (use the exact name from the vocabulary discovery).
 
 ## Interrogating the "Acoustic DNA"

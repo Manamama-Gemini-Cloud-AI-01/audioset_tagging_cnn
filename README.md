@@ -64,8 +64,8 @@ The codebase has been upgraded for efficiency and interactive analysis, particul
 
 ### 1. High-Performance Inference (`audio_me.sh`)
 The `audio_me.sh` script is the primary entry point for Sound Event Detection. It uses a **"Smart Skip" (Idempotent)** strategy:
-- **Phase 1: Inference Check.** If the output directory and key files (like `full_event_log.csv`) already exist, the script skips the heavy neural network processing entirely, saving significant time and CPU/Battery.
-- **Phase 2: Automatic Dashboard.** After inference (or after detecting existing results), it automatically launches the **Shapash Correlations Dashboard**.
+- **Phase 1: Inference Check.** If the output directory and every artifact the run would produce (`full_event_log.h5`, `eventogram.png`, `interactive_dashboard.html`, `summary_events.csv`, the delta JSON, plus any requested eventogram video) already exist, the script skips the heavy neural network processing entirely, saving significant time and CPU/Battery. If the HDF5 exists but any of the derived artifacts is missing, inference is skipped and only that artifact is rebuilt.
+- **Phase 2: Optional Dashboard.** Adding `--shapash` to `audio_me.sh` launches the **Shapash Correlations Dashboard** after inference. Without the flag nothing is launched — the Plotly `interactive_dashboard.html` is the always-on dashboard.
 
 ### 2. Shapash "Acoustic Brain" Persistence
 The dashboard launcher (`scripts/Shapash_visualization/launch_correlations_dashboard.py`) is now momentum-aware:

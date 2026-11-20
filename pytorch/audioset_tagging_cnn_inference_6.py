@@ -320,10 +320,16 @@ def sound_event_detection(args):
     create_folder(output_dir)
 
     tag_suffix = "_audioset_tagging_cnn"
+
+    # Every artifact a run produces, video or not. Declared here because the idempotency
+    # check below has to know about all of them, not only the videos.
+    h5_path = os.path.join(output_dir, 'full_event_log.h5')
     fig_path = os.path.join(output_dir, 'eventogram.png')
+    html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
+    summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
+    json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
 
     # --- PHASE 2: Idempotency Check ---
-    h5_path = os.path.join(output_dir, 'full_event_log.h5')
     
     # Efficiently probe all metadata once
     duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
@@ -340,9 +346,14 @@ def sound_event_detection(args):
 
     # Partial Skip Logic: If HDF5 exists, we can skip inference
     skip_inference = os.path.exists(h5_path)
-    
-    # Full Skip Logic: If CSV AND all requested videos exist
-    if skip_inference and all(os.path.exists(f) for f in video_outputs):
+
+    # Full Skip Logic: only when everything this run would produce already exists.
+    # Checking the videos alone was a footgun: with no video flags `all([])` is True, so any
+    # rerun against an existing HDF5 exited silently without regenerating the dashboard,
+    # the summary CSV, the PNG or the JSON.
+    expected_outputs = video_outputs + [h5_path, fig_path, html_dashboard_path,
+                                        summary_csv_path, json_ai_path]
+    if skip_inference and all(os.path.exists(f) for f in expected_outputs):
         print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         print(f"To start anew, execute e.g.: \033[1;31m rm -rf \"{output_dir}\"\033[1;0m")
         return
@@ -673,7 +684,6 @@ def sound_event_detection(args):
 
     # --- PHASE 12: Interactive Plotly Dashboard (All Events) ---
     print("📊  Generating interactive Plotly dashboard (All Classes)…")
-    html_dashboard_path = os.path.join(output_dir, 'interactive_dashboard.html')
 
     # Pass all classes to allow forensic search, not just top 50
     times = [round(i / effective_ui_fps, 2) for i in range(frames_num)]
@@ -788,7 +798,6 @@ def sound_event_detection(args):
 
     # --- PHASE 10: AI-Friendly Summary Generation (Event Block Detection) ---
     print("📊  Generating AI-friendly event summary files…")
-    summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     
     # Load data from HDF5
     with h5py.File(h5_path, 'r') as hf:
@@ -853,7 +862,6 @@ def sound_event_detection(args):
     # This format is optimized for AI attention mechanisms: it uses Run-Length Encoding (RLE)
     # and probability deltas to focus on "attacks" and "decays".
     print("📊  Generating detailed AI-friendly event delta JSON (RLE optimized)…")
-    json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
     ai_threshold = 0.05
     events_derivative = collections.defaultdict(list)
     
@@ -1150,7 +1158,9 @@ if __name__ == '__main__':
     parser.add_argument('--static_eventogram', action='store_true', default=False,
                         help='Generate static eventogram with a scrolling marker (faster to generate)')
     parser.add_argument('--no-shapash', action='store_true', default=False,
-                        help='Skip Shapash dashboard launch')
+                        help='Accepted and ignored. This script never launches Shapash; '
+                             'audio_me.sh does, and only when given its own --shapash flag. '
+                             'Kept so existing command lines do not break.')
                         
     parser.add_argument('--crf', type=int, default=23, help='FFmpeg CRF value (0-51, lower is higher quality)')
     parser.add_argument('--bitrate', type=str, default=None, help='FFmpeg video bitrate (e.g., "2000k" for 2 Mbps)')
@@ -1184,8 +1194,14 @@ if __name__ == '__main__':
     print(f"Eventogrammer, version 6.13.2") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
-    print(f"* Plotly graph resolution fixes: the code for plotly graphing moved earlier, to be tested. ")      
-    print(f"* Media player added to plotly graph. ")   
+    print(f"* Dashboard default visibility is now data-driven (per-class peak >= 0.05) instead of")
+    print(f"  AudioSet vocabulary index 0-9, which showed only the speech block.")
+    print(f"* Unified hover is sorted by value (layout.hoversort, needs plotly >= 6.8).")
+    print(f"* summary_events.csv uses an absolute 0.02 floor; it no longer inherits the")
+    print(f"  eventogram's top-10 ranking, which silently dropped faint events.")
+    print(f"* Skip logic now checks every artifact, so a rerun with no video flags really")
+    print(f"  regenerates a missing dashboard/CSV/PNG/JSON instead of exiting silently.")
+    print(f"* Media player added to plotly graph. ")
     print(f"* H5py used instead of CSV to save disk space.")
     print(f"* We convert all files to MP3")
     print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")

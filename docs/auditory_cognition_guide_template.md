@@ -687,7 +687,7 @@ The Shapash callback structure you discovered (with `ember_global_feature_import
 
 ## Remaining Data Files (Reference)
 
-- **`full_event_log.csv`**: Raw probability matrix. Query it like a database.
+- **`full_event_log.h5`**: Raw probability matrix in HDF5 (`framewise_output`). Query it like a database.
 - **`summary_events.csv`**: Summary of prominent events. Read it for context.
 - **`detailed_events_delta_ai_attention_friendly.json`**: Attack/decay signatures. Cross-check against SHAP.
 - **`interactive_dashboard.html`**: Standalone Plotly dashboard. Reference, don't query.

@@ -43,7 +43,7 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 
 1. **Eventogram Generation (`matplotlib`:
    
-   * **Static Image:** It generates a static PNG (`eventogram.png`) showing a spectrogram of the entire audio file on top and a heatmap of the top 10 most prominent sound events on the bottom. It dynamically calculates the left margin to ensure y-axis labels are never cut off.
+   * **Static Image:** It generates a static PNG (`eventogram.png`) showing a spectrogram of the entire audio file on top and a heatmap of the top 10 most prominent sound events on the bottom. It dynamically calculates the left margin to ensure y-axis labels are never cut off. **Known limitation:** those ten rows are chosen by peak probability across the whole file, so a brief or heavily attenuated event (a distant explosion, a single footstep) can be entirely absent from the PNG even though it is present in the HDF5, the CSV summary and the Plotly dashboard. Use the dashboard or `detailed_events_delta_ai_attention_friendly.json` when a faint event matters.
    
    * **Dynamic Video (Optional):** If `--dynamic_eventogram` is used, it generates a video where the eventogram is a moving window, showing the top 10 events local to the current playback time.
 
@@ -59,15 +59,15 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 
 3. **Data Export:**
    
-   * `full_event_log.csv`: A detailed CSV file (wide matrix format) logging every detected sound event probability for every time frame. This is the **primary input** for the Shapash dashboard.
+   * `full_event_log.h5`: A detailed HDF5 file (wide matrix format inside, `framewise_output` dataset) logging every detected sound event probability for every time frame. Replaced the old CSV to save disk space; this is the **primary input** for the Shapash dashboard.
    
-   * `summary_events.csv`: A user-friendly summary that identifies continuous blocks of sound events.
+   * `summary_events.csv`: A user-friendly summary that identifies continuous blocks of sound events. Every class whose peak reaches **0.02** is included — inclusion is an absolute floor and is deliberately *not* tied to the eventogram's top-10 ranking, which would silently delete faint-but-real events.
    
    * `detailed_events_delta_ai_attention_friendly.json`: A momentum-aware map of sound events using probability deltas, specifically optimized for AI attention mechanisms. It uses **Run-Length Encoding (RLE)** to collapse periods of steady-state audio into `{"skip": N}` markers, making it significantly more token-efficient for AI readers. It is the primary tool for forensic analysis of **attacks**, **decays**, and **rhythm**.
    
-   * `interactive_dashboard.html`: A self-contained, portable Plotly dashboard for exploring the top 50 sound events with zoom and filtering.
-   
-   * `summary_manifest.json`: A JSON file cataloging all the generated artifacts.
+   * `interactive_dashboard.html`: A self-contained, portable Plotly dashboard covering **all 527 classes** (searchable), not a top-N subset. Default visibility is data-driven — a trace is drawn by default when its own peak reaches **0.05** — and the unified hover is sorted by value via `layout.hoversort` (requires plotly ≥ 6.8).
+
+   * `summary_manifest.json`: **No longer produced by this script.** It belongs to the 6.0.x/6.1/6.2 archive versions; v6.13 emits the five artifact types above.
 
 ## 4. Shapash Correlations Dashboard
 
@@ -366,10 +366,10 @@ The current script "over-samples the canvas"—feeding 180,000 data points into 
 
 ### 1. High-Resolution Inference Safety
 
-Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.8.12) on full tracks is **not "scary"** for system resources or terminal context. 
+Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.13.x) on full tracks is **not "scary"** for system resources or terminal context. 
 
 - **Terminal Hygiene:** The script is engineered to output only concise high-level progress and info messages (e.g., "Chunk at Xm finished"). 
-- **Data Redirection:** All massive probability matrices and frame-wise logs are redirected directly to disk (`full_event_log.csv`). 
+- **Data Redirection:** All massive probability matrices and frame-wise logs are redirected directly to disk (`full_event_log.h5`). 
 - **CLI Compatibility:** The Gemini CLI environment safely handles any unexpected long printouts by redirecting them to temporary files, ensuring your active context window remains clean for analytical reasoning.
 
 ### 2. The "32kHz Ritual" (Inference vs. Native SR)

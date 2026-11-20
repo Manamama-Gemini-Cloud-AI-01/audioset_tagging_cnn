@@ -1,7 +1,33 @@
-matplotlib
-soundfile
-librosa
+# Core inference path (pytorch/audioset_tagging_cnn_inference_6.py)
+# Torch family must be installed together, from ONE source, or you get ABI
+# collisions / "undefined symbol" crashes. Prefer:
+#   pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu
 torch
+torchaudio
+torchcodec
 torchlibrosa
-moviepy
+
+numpy
+soundfile
 h5py
+matplotlib
+psutil
+plotly>=6.8          # layout.hoversort (strength-sorted unified hover) is 6.8+
+
+# Still imported by the upstream helpers we ship (pytorch/inference.py,
+# utils/utilities.py). Not used by the SED path itself.
+librosa
+
+# --- Shapash "acoustic brain" (scripts/Shapash_visualization/) ---
+# Not installed by default: the Dash/SHAP stack is heavy and has its own
+# binary-compatibility problems (e.g. shap needing a matching numba/llvmlite).
+# pandas
+# scikit-learn
+# shap
+# shapash
+# joblib
+# tqdm
+
+# moviepy was dropped when video rendering moved to a direct ffmpeg pipe.
+# Only the archived scripts under archive/ and pytorch/Archive/ still need it.
+# moviepy
