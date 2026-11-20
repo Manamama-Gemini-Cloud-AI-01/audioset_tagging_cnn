@@ -460,8 +460,10 @@ def sound_event_detection(args):
     effective_ui_fps = ui_fps / ui_agg_factor
     ui_downsample = max(1, int(inference_fps / effective_ui_fps))
 
-    # Pre-allocate fixed-size buffers for O(1) memory management
-    num_ui_frames = int(duration * effective_ui_fps) + 1
+    # Pre-allocate fixed-size buffers for O(1) memory management.
+    # One extra chunk of headroom absorbs last-chunk padding from the model, so the
+    # H5 master and this buffer stay row-for-row identical.
+    num_ui_frames = int(duration * effective_ui_fps) + int(chunk_duration * effective_ui_fps) + 2
     framewise_ui_buffer = np.zeros((num_ui_frames, len(labels)), dtype=np.float32)
     current_ui_row = 0
     stft_vis_list = []
@@ -478,16 +480,23 @@ def sound_event_detection(args):
         resampler = torchaudio.transforms.Resample(orig_freq=native_sr, new_freq=sample_rate).to(device)
 
     if not skip_inference:
-        # Pre-calculate total rows to enable pre-allocation
-        total_rows_est = int(np.ceil(duration * args.log_fps))
-        
+        # Pre-calculate total rows to enable pre-allocation.
+        # ONE resolution for the whole pipeline: the max-pooled UI/analysis grid.
+        if args.log_fps != args.ui_fps:
+            print(f"\033[1;33mNote: --log_fps ({args.log_fps}) and --ui_fps ({args.ui_fps}) differ; "
+                  f"the unified master dataset uses ui_fps ({args.ui_fps} Hz).\033[0m")
+        total_rows_est = int(np.ceil(duration * effective_ui_fps))
+
         # Initialize HDF5 with NO compression during the loop to avoid single-threaded stalls.
         # Pre-allocating the shape prevents expensive resizing during inference.
         h5_file = h5py.File(h5_path, 'w')
+        # UNIFIED MASTER DATASET: the single source of truth for both analysis and the dashboard.
+        # float32, max-pooled, no threshold => faint/transient signals are preserved.
         h5_dataset = h5_file.create_dataset('framewise_output', 
                                             shape=(total_rows_est, len(labels)), 
                                             maxshape=(None, len(labels)), 
-                                            dtype='float32', compression='gzip')
+                                            dtype='float32', compression='gzip',
+                                            chunks=(256, len(labels)))
         h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
         h5_stft_viz = h5_file.create_dataset('stft_viz',
                                              shape=(513, 0),
@@ -533,33 +542,43 @@ def sound_event_detection(args):
                 batch_output_dict = model(chunk_waveform, None)
                 chunk_out = batch_output_dict['framewise_output'].data.cpu().numpy()[0]
 
-            # Step C: Write results to disk (OOM-safe, vectorized streaming to HDF5)
+            # Step C: Reduce raw model frames to the single master grid.
+            # MAX-POOLING (not striding): a strided read can step over a short transient,
+            # max-pooling keeps the peak of every window. No threshold, so faint signals survive.
             chunk_start_time = float(chunk_offset)
-            log_downsample = max(1, inference_fps // args.log_fps)
+            pooled_rows = []
+            pooled_timestamps = []
+            for v_row_idx in range(0, len(chunk_out), ui_downsample):
+                vis_slice = chunk_out[v_row_idx : v_row_idx + ui_downsample]
+                if len(vis_slice) > 0:
+                    pooled_rows.append(np.max(vis_slice, axis=0))
+                    pooled_timestamps.append(chunk_start_time + (v_row_idx / inference_fps))
 
-            downsampled_data = chunk_out[::log_downsample]
+            if pooled_rows:
+                downsampled_data = np.asarray(pooled_rows, dtype=np.float32)
+            else:
+                downsampled_data = np.empty((0, len(labels)), dtype=np.float32)
             num_rows = downsampled_data.shape[0]
-            downsampled_timestamps = np.array([chunk_start_time + (f_idx / inference_fps) 
-                                               for f_idx in range(0, len(chunk_out), log_downsample)], dtype='float32')
+            downsampled_timestamps = np.asarray(pooled_timestamps, dtype='float32')
 
             # Ensure pre-allocation was enough (safety check)
             if current_row + num_rows > h5_dataset.shape[0]:
                 h5_dataset.resize(current_row + num_rows + 1000, axis=0)
                 h5_timestamps.resize(current_row + num_rows + 1000, axis=0)
 
-            # Fast Vectorized Write (No compression / No flush = High CPU utilization)
-            h5_dataset[current_row : current_row + num_rows] = downsampled_data.astype('float32')
-            h5_timestamps[current_row : current_row + num_rows] = downsampled_timestamps
-
-            current_row += num_rows
-            
-            # Step D: Downsample for RAM-based visualization (Max-pooling preserves short events)
-            for v_row_idx in range(0, len(chunk_out), ui_downsample):
-                vis_slice = chunk_out[v_row_idx : v_row_idx + ui_downsample]
-                if len(vis_slice) > 0:
-                    if current_ui_row < len(framewise_ui_buffer):
-                        framewise_ui_buffer[current_ui_row] = np.max(vis_slice, axis=0)
-                        current_ui_row += 1
+            # Write the SAME rows to disk and to the RAM buffer so they cannot diverge.
+            # `n_write` is bounded by the buffer; with the headroom above this only
+            # bites if the media duration was badly underestimated by the probe.
+            n_write = min(num_rows, len(framewise_ui_buffer) - current_ui_row)
+            if n_write < num_rows:
+                print(f"\033[1;33mWarning: RAM buffer full; dropping {num_rows - n_write} "
+                      f"trailing rows (probed duration was too short).\033[0m")
+            if n_write > 0:
+                h5_dataset[current_row : current_row + n_write] = downsampled_data[:n_write]
+                h5_timestamps[current_row : current_row + n_write] = downsampled_timestamps[:n_write]
+                framewise_ui_buffer[current_ui_row : current_ui_row + n_write] = downsampled_data[:n_write]
+                current_row += n_write
+                current_ui_row += n_write
 
             # Step E: STFT for visualization background
             chunk_numpy = chunk_waveform.squeeze(0).cpu().numpy()
@@ -593,7 +612,6 @@ def sound_event_detection(args):
         # Save visualization-specific data to HDF5 for persistent fidelity
         h5_file.attrs['effective_ui_fps'] = effective_ui_fps
         h5_file.attrs['ui_agg_factor'] = ui_agg_factor
-        h5_file.create_dataset('framewise_ui', data=framewise_ui_buffer[:current_ui_row], compression='gzip')
         
         h5_file.close()
 
@@ -611,10 +629,12 @@ def sound_event_detection(args):
 
     # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
     if not skip_inference:
-        # Use only the filled portion of the pre-allocated buffer
+        # The in-RAM buffer holds the exact rows already written to the H5 master,
+        # so use it directly instead of re-reading gigabytes from disk.
         framewise_output = framewise_ui_buffer[:current_ui_row]
-        stft = h5py.File(h5_path, 'r')['stft_viz'][:] # Load from HDF5 instead
         del framewise_ui_buffer
+        with h5py.File(h5_path, 'r') as hf:
+            stft = hf['stft_viz'][:]
     elif skip_inference:
         # Load data from HDF5 if inference was skipped
         with h5py.File(h5_path, 'r') as hf:
@@ -624,11 +644,10 @@ def sound_event_detection(args):
             if 'ui_agg_factor' in hf.attrs:
                 ui_agg_factor = hf.attrs['ui_agg_factor']
             
-            # Load the visualization-resolution data instead of the analysis-resolution data
             if 'framewise_ui' in hf:
+                # Legacy files from before the unified-master change
                 framewise_output = hf['framewise_ui'][:]
             else:
-                # Fallback for legacy HDF5 files
                 framewise_output = hf['framewise_output'][:]
             stft = hf['stft_viz'][:]
     else:
