@@ -728,9 +728,12 @@ def sound_event_detection(args):
     <div id="plot"></div>
     <script type="text/javascript">
         const data = {json_payload};
+        // Default visibility must be data-driven. An ontology index (index < 10) selects the
+        // first ten AudioSet classes (all speech-related), NOT the ten strongest detections.
+        const peaks = data.traces.map(t => t.y.reduce((m, v) => (v > m ? v : m), 0));
         const traces = data.traces.map((t, index) => ({{
             x: data.times, y: t.y, name: t.name, mode: 'lines',
-            visible: index < 10 ? true : 'legendonly', 
+            visible: peaks[index] >= 0.05 ? true : 'legendonly',
             line: {{ width: 2 }}
         }}));
         
@@ -746,7 +749,11 @@ def sound_event_detection(args):
             }},
             yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
             legend: {{ orientation: 'h', y: -0.2 }},
-            hovermode: 'x unified', paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+            // Rows in the unified hover are listed in trace order (AudioSet vocabulary
+            // index) by default, which says nothing about what is happening. Plotly's
+            // native hoversort ranks them by value at the hovered frame instead.
+            hovermode: 'x unified', hoversort: 'value descending',
+            paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             margin: {{ t: 50, b: 100, l: 60, r: 20 }}
         }}, {{ responsive: true }});
 
@@ -793,11 +800,18 @@ def sound_event_detection(args):
     min_event_duration_seconds = 0.5 
     top_n_per_class = 3 # Only export the strongest N events per class
 
-    events_by_class = {label: [] for label in top_labels}
+    # Inclusion gate: an absolute floor, not the top-10-by-peak list.
+    # Ranking and inclusion are separate decisions. Gating on top_labels silently deleted
+    # every event outside the eventogram's top rows (e.g. the Explosion in this clip).
+    event_floor = 0.02
+    peak_by_label = framewise_output.max(axis=0)
+    event_labels = [labels[i] for i in np.where(peak_by_label >= event_floor)[0]]
 
-    # Identify continuous blocks of sound for the top classes shown in the eventogram
+    events_by_class = {label: [] for label in event_labels}
+
+    # Identify continuous blocks of sound for every class above the floor
     for label_idx, label in enumerate(labels):
-        if label not in top_labels: continue
+        if label not in events_by_class: continue
         
         in_event, event_start_idx = False, 0
         for idx, prob in enumerate(framewise_output[:, label_idx]):
