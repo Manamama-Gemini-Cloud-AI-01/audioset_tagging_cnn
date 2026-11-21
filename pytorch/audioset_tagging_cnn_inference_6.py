@@ -49,11 +49,11 @@ except (OSError, ImportError, RuntimeError):
 # over full library replacement to preserve these architectural benefits.
 import csv
 import datetime
+import gc
 import time
 import subprocess
 import shutil
 import warnings
-import soundfile as sf
 import psutil
 #import coverage 
 
@@ -212,6 +212,30 @@ def get_dynamic_top_events(framewise_output, start_idx, end_idx, top_k=10):
     sorted_indexes = np.argsort(max_probs)[::-1][:top_k]
     return window_output[:, sorted_indexes], sorted_indexes
 
+def h5_master_key(hf):
+    """Name of the master probability grid ('framewise_ui' is the legacy spelling)."""
+    return 'framewise_ui' if 'framewise_ui' in hf else 'framewise_output'
+
+def h5_has_payload(h5_path):
+    """True only for a *finished* event log.
+
+    A run that dies between ``h5py.File(..., 'w')`` and the first successful
+    ``create_dataset()`` leaves a valid but empty HDF5 file (superblock + empty
+    root group, ~800 bytes, no datasets). Treating that as "inference already
+    done" turned the *first* crash into a murky
+    ``KeyError: "object 'framewise_output' doesn't exist"`` on the next run, so
+    only skip inference when every dataset we are going to read is there and
+    non-empty. Anything else is treated as a stale artifact and recomputed.
+    """
+    try:
+        with h5py.File(h5_path, 'r') as hf:
+            key = h5_master_key(hf)
+            if any(k not in hf for k in (key, 'stft_viz', 'timestamps')):
+                return False
+            return hf[key].shape[0] > 0 and hf['stft_viz'].shape[1] > 0
+    except OSError:
+        return False
+
 def audio_tagging(args):
     sample_rate = args.sample_rate
     window_size = args.window_size
@@ -344,8 +368,12 @@ def sound_event_detection(args):
         vid_path = os.path.join(output_dir, f'{base_name}{tag_suffix}_eventogram_dynamic.mp4')
         video_outputs.append(f"{os.path.splitext(vid_path)[0]}_overlay.mp4" if is_video else vid_path)
 
-    # Partial Skip Logic: If HDF5 exists, we can skip inference
-    skip_inference = os.path.exists(h5_path)
+    # Partial Skip Logic: only a finished HDF5 lets us skip the model pass.
+    h5_exists = os.path.exists(h5_path)
+    skip_inference = h5_exists and h5_has_payload(h5_path)
+    if h5_exists and not skip_inference:
+        print(f"\033[1;33mWarning: existing {h5_path} is empty or incomplete "
+              f"(a previous run died before finishing it). Re-running inference.\033[0m")
 
     # Full Skip Logic: only when everything this run would produce already exists.
     # Checking the videos alone was a footgun: with no video flags `all([])` is True, so any
@@ -381,9 +409,6 @@ def sound_event_detection(args):
             return
 
     # --- PHASE 4: Media Integrity & Recovery (Sanitary Gate) ---
-    sf_formats = sf.available_formats()
-    has_mp3_support = 'MP3' in sf_formats
-    source_ext = os.path.splitext(source_media)[1][1:].upper()
     duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)    
     # Always re-encode to CBR MP3 to fix seekability/drift issues
     print(f"🎬  Re-encoding input to CBR MP3 for stability of the chunk seeking...")
@@ -393,8 +418,10 @@ def sound_event_detection(args):
     # Refresh duration and metadata for the sanitized file
 
 
-    # Fallback Recovery: If duration is still 0 (e.g. corrupt header), attempt emergency recovery
-    if duration == 0:
+    # Fallback Recovery: If duration is still unknown/0 (e.g. corrupt header),
+    # attempt emergency recovery. `not duration` also catches None, which would
+    # otherwise blow up later as int(None).
+    if not duration:
         print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting emergency recovery...\033[0m")
         mp3_path = os.path.join(tempfile.gettempdir(), f"{base_name}_recovered.mp3")
 
@@ -442,9 +469,7 @@ def sound_event_detection(args):
     except Exception:
         # Fallback if ffprobe fails
         _, native_sr = torchaudio.load(inference_media, frame_offset=0, num_frames=1)
-        
-    native_num_frames = int(duration * native_sr)
-    
+
     # --- USER INTERFACE & LOGGING ---
     duration_str = str(datetime.timedelta(seconds=int(duration))) if duration else "?"
     print(f"⏲  🗃️  File duration: \033[1;34m{duration_str}\033[0m")
@@ -453,31 +478,27 @@ def sound_event_detection(args):
     chunk_duration = 180  # 3 minutes
     native_chunk_samples = int(chunk_duration * native_sr)
 
-    # Aesthetic Decoupling: Disabled. UI resolution now strictly follows ui_fps.
-    ui_agg_factor = 1
+    # One resolution for the whole pipeline: the max-pooled UI/analysis grid.
+    # Derive the *actual* rate from the integer pooling factor, so a --ui_fps that
+    # does not divide inference_fps (e.g. 3 Hz) cannot silently drift: 100/3 -> 33
+    # frames = 3.0303 Hz, and every timestamp/x-axis/attr uses that same number.
+    ui_downsample = max(1, round(inference_fps / ui_fps))
+    effective_ui_fps = inference_fps / ui_downsample
+    if abs(effective_ui_fps - ui_fps) > 1e-9:
+        print(f"\033[1;33mNote: --ui_fps {ui_fps} Hz pools {ui_downsample} model frames "
+              f"({inference_fps} Hz) -> effective {effective_ui_fps:.4f} Hz.\033[0m")
 
-    # Store the original ui_fps for display, but update ui_fps for internal logic
-    effective_ui_fps = ui_fps / ui_agg_factor
-    ui_downsample = max(1, int(inference_fps / effective_ui_fps))
-
-    # Pre-allocate fixed-size buffers for O(1) memory management.
+    # Pre-allocate fixed-size buffers for O(number of rows) memory management.
     # One extra chunk of headroom absorbs last-chunk padding from the model, so the
     # H5 master and this buffer stay row-for-row identical.
     num_ui_frames = int(duration * effective_ui_fps) + int(chunk_duration * effective_ui_fps) + 2
     framewise_ui_buffer = np.zeros((num_ui_frames, len(labels)), dtype=np.float32)
     current_ui_row = 0
-    stft_vis_list = []
 
     # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
     avail_ram = psutil.virtual_memory().available / (1024 * 1024)
     print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
     print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
-    if ui_agg_factor > 1:
-        print(f"💡 Aesthetic Decoupling: Aggregating {ui_agg_factor}x into {max_vis_cols} RAM columns.")
-
-    resampler = None
-    if native_sr != sample_rate:
-        resampler = torchaudio.transforms.Resample(orig_freq=native_sr, new_freq=sample_rate).to(device)
 
     if not skip_inference:
         # Pre-calculate total rows to enable pre-allocation.
@@ -487,7 +508,10 @@ def sound_event_detection(args):
                   f"the unified master dataset uses ui_fps ({args.ui_fps} Hz).\033[0m")
         total_rows_est = int(np.ceil(duration * effective_ui_fps))
 
-        # Initialize HDF5 with NO compression during the loop to avoid single-threaded stalls.
+        # Chunked + LZF. h5py docs: lzf is "available with every installation of
+        # h5py" and "very fast", while gzip/deflate needs a libhdf5 built with
+        # zlib (Termux's is not, so `compression='gzip'` raises
+        # ValueError: Compression filter "gzip" is unavailable).
         # Pre-allocating the shape prevents expensive resizing during inference.
         h5_file = h5py.File(h5_path, 'w')
         # UNIFIED MASTER DATASET: the single source of truth for both analysis and the dashboard.
@@ -495,17 +519,19 @@ def sound_event_detection(args):
         h5_dataset = h5_file.create_dataset('framewise_output', 
                                             shape=(total_rows_est, len(labels)), 
                                             maxshape=(None, len(labels)), 
-                                            dtype='float32', compression='gzip',
+                                            dtype='float32', compression='lzf',
                                             chunks=(256, len(labels)))
         h5_file.create_dataset('labels', data=np.array(labels, dtype='S'))
+        # STFT bins come from --window_size (n_fft), not from a hard-coded 513.
+        stft_bins = window_size // 2 + 1
         h5_stft_viz = h5_file.create_dataset('stft_viz',
-                                             shape=(513, 0),
-                                             maxshape=(513, None),
-                                             dtype='float32', compression='gzip')
+                                             shape=(stft_bins, 0),
+                                             maxshape=(stft_bins, None),
+                                             dtype='float32', compression='lzf')
         h5_timestamps = h5_file.create_dataset('timestamps', 
                                                shape=(total_rows_est,), 
                                                maxshape=(None,), 
-                                               dtype='float32', compression='gzip')
+                                               dtype='float32', compression='lzf')
 
         from torchcodec.decoders import AudioDecoder
         decoder = AudioDecoder(inference_media, sample_rate=sample_rate, num_channels=1)
@@ -597,7 +623,6 @@ def sound_event_detection(args):
 
             # Cleanup
             del chunk_waveform, chunk_numpy, chunk_tensor_stft, chunk_stft, chunk_out, batch_output_dict, downsampled_data
-            import gc
             gc.collect()
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
@@ -611,7 +636,6 @@ def sound_event_detection(args):
         
         # Save visualization-specific data to HDF5 for persistent fidelity
         h5_file.attrs['effective_ui_fps'] = effective_ui_fps
-        h5_file.attrs['ui_agg_factor'] = ui_agg_factor
         
         h5_file.close()
 
@@ -635,24 +659,16 @@ def sound_event_detection(args):
         del framewise_ui_buffer
         with h5py.File(h5_path, 'r') as hf:
             stft = hf['stft_viz'][:]
-    elif skip_inference:
-        # Load data from HDF5 if inference was skipped
+    else:
+        # Load data from HDF5 if inference was skipped (h5_has_payload() already
+        # guaranteed these datasets exist and carry rows).
         with h5py.File(h5_path, 'r') as hf:
             # Restore the exact visualization parameters used during the original run
             if 'effective_ui_fps' in hf.attrs:
                 effective_ui_fps = hf.attrs['effective_ui_fps']
-            if 'ui_agg_factor' in hf.attrs:
-                ui_agg_factor = hf.attrs['ui_agg_factor']
-            
-            if 'framewise_ui' in hf:
-                # Legacy files from before the unified-master change
-                framewise_output = hf['framewise_ui'][:]
-            else:
-                framewise_output = hf['framewise_output'][:]
+
+            framewise_output = hf[h5_master_key(hf)][:]
             stft = hf['stft_viz'][:]
-    else:
-        print("Error: Inference returned no data. Check input file or model.")
-        return
 
     if framewise_output.size == 0:
         print("Error: No event data detected.")
@@ -818,9 +834,9 @@ def sound_event_detection(args):
     # --- PHASE 10: AI-Friendly Summary Generation (Event Block Detection) ---
     print("📊  Generating AI-friendly event summary files…")
     
-    # Load data from HDF5
+    # `framewise_output` is already in memory from Phase 8 (RAM buffer on a fresh
+    # run, HDF5 on a skipped one); only the timestamps still need reading.
     with h5py.File(h5_path, 'r') as hf:
-        framewise_output = hf['framewise_output'][:]
         timestamps = hf['timestamps'][:]
         
     # Event detection heuristics
@@ -885,9 +901,6 @@ def sound_event_detection(args):
     events_derivative = collections.defaultdict(list)
     
     # We already loaded framewise_output in Phase 10
-    
-    # Compute derivative (momentum of change)
-    delta_output = np.diff(framewise_output, axis=0, prepend=0)
 
     def zip_trace(trace):
         """Compress trace by replacing consecutive zeros with a skip marker."""
