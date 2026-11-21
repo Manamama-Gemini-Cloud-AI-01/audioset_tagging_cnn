@@ -741,6 +741,111 @@ def sound_event_detection(args):
     plotly_js = pyo.get_plotlyjs()
     rel_audio_path = os.path.relpath(audio_path, output_dir)
 
+    # Kept out of the f-string below on purpose: JS braces would otherwise all need
+    # doubling. This is a plain string, injected as a single `{hover_tooltip_js}` slot.
+    hover_tooltip_js = r"""
+        // --- Custom hover tooltip: top-heavy, never clipped ---------------------------
+        // The native 'x unified' legend renders one row per drawn trace. With 144 traces
+        // it is ~3,000 px tall, far taller than the plot, and Plotly clips it to the plot
+        // area: the visible slice is the *tail* of the list — the near-zero classes —
+        // while the strongest events sit above the top edge. The native legend is hidden
+        // in CSS and this handler draws a compact tooltip instead: the strongest classes
+        // at the hovered frame, ranked descending (the "top-heavy" reading order).
+        const HOVER_ROWS = 12;        // rows shown in the tooltip
+        const HOVER_FLOOR = 0.005;    // ignore probabilities below this (noise floor)
+
+        const hoverTip = document.createElement('div');
+        hoverTip.id = 'hoverTip';
+        hoverTip.style.cssText = [
+            'min-width: 180px', 'max-width: 340px', 'padding: 6px 8px',
+            'background: rgba(255,255,255,0.97)', 'border: 1px solid #cbd5e1',
+            'border-radius: 6px', 'box-shadow: 0 2px 8px rgba(0,0,0,0.18)',
+            'font: 11px/1.35 sans-serif', 'color: #333'
+        ].join(';');
+        plotElement.appendChild(hoverTip);
+
+        const FRAME_STEP = data.times.length > 1 ? (data.times[1] - data.times[0]) : 1;
+        const FRAME_LAST = data.times.length - 1;
+
+        function frameIndex(t) {
+            const i = Math.round((t - data.times[0]) / FRAME_STEP);
+            return i < 0 ? 0 : (i > FRAME_LAST ? FRAME_LAST : i);
+        }
+
+        function clockLabel(t) {
+            const s = Math.max(0, Math.round(t));
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const ss = String(s % 60).padStart(2, '0');
+            return h > 0
+                ? h + ':' + String(m).padStart(2, '0') + ':' + ss
+                : String(m).padStart(2, '0') + ':' + ss;
+        }
+
+        function traceColour(k) {
+            const fd = plotElement._fullData && plotElement._fullData[k];
+            return (fd && fd.line && fd.line.color) || '#94a3b8';
+        }
+
+        plotElement.on('plotly_hover', function (ev) {
+            const pt = ev.points && ev.points[0];
+            if (!pt) return;
+            const i = frameIndex(pt.x);
+
+            // Rank every currently drawn trace by its probability at this frame.
+            const rows = [];
+            for (let k = 0; k < traces.length; k++) {
+                const fd = plotElement._fullData && plotElement._fullData[k];
+                if (fd && fd.visible !== true) continue;   // skip legendonly traces
+                const v = traces[k].y[i];
+                if (v >= HOVER_FLOOR) rows.push([v, k]);
+            }
+            rows.sort(function (a, b) { return b[0] - a[0] || a[1] - b[1]; });
+
+            let html = '<div style="font-weight:600;color:#111;margin-bottom:4px">'
+                     + clockLabel(pt.x) + '</div>';
+            if (rows.length === 0) {
+                html += '<div style="color:#94a3b8">nothing above ' + HOVER_FLOOR + '</div>';
+            }
+            for (let j = 0; j < rows.length && j < HOVER_ROWS; j++) {
+                const v = rows[j][0], k = rows[j][1];
+                html += '<div style="display:flex;align-items:center;gap:6px;white-space:nowrap">'
+                     +  '<span style="flex:0 0 10px;height:2px;background:' + traceColour(k) + '"></span>'
+                     +  '<span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">'
+                     +  traces[k].name + '</span>'
+                     +  '<span style="flex:0 0 auto;font-variant-numeric:tabular-nums;color:#475569">'
+                     +  v.toFixed(3) + '</span>'
+                     +  '</div>';
+            }
+            if (rows.length > HOVER_ROWS) {
+                html += '<div style="margin-top:3px;color:#94a3b8">… '
+                     +  (rows.length - HOVER_ROWS) + ' more ≥ ' + HOVER_FLOOR + '</div>';
+            }
+            hoverTip.innerHTML = html;
+            hoverTip.style.display = 'block';
+
+            // Park the tooltip beside the cursor, flipping/clamping inside the plot box.
+            const box = plotElement.getBoundingClientRect();
+            const e = ev.event || {};
+            const cx = typeof e.clientX === 'number' ? e.clientX : box.left + box.width / 2;
+            const cy = typeof e.clientY === 'number' ? e.clientY : box.top + box.height / 2;
+            let left = cx - box.left + 16;
+            let top = cy - box.top + 16;
+            if (left + hoverTip.offsetWidth > box.width - 4) {
+                left = cx - box.left - hoverTip.offsetWidth - 16;
+            }
+            if (top + hoverTip.offsetHeight > box.height - 4) {
+                top = box.height - hoverTip.offsetHeight - 4;
+            }
+            hoverTip.style.left = Math.max(4, left) + 'px';
+            hoverTip.style.top = Math.max(4, top) + 'px';
+        });
+
+        function hideHoverTip() { hoverTip.style.display = 'none'; }
+        plotElement.on('plotly_unhover', hideHoverTip);
+        plotElement.addEventListener('mouseleave', hideHoverTip);
+    """
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -750,7 +855,14 @@ def sound_event_detection(args):
     <script type="text/javascript">{plotly_js}</script>
     <style>
         body {{ font-family: sans-serif; margin: 20px; background: #fafafa; color: #333; }}
-        #plot {{ width: 100%; height: 60vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
+        #plot {{ position: relative; width: 100%; height: 60vh; background: white; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px; }}
+        /* The native "x unified" hover legend draws one row per drawn trace. With 100+
+           traces it is several thousand pixels tall, far taller than the plot, and Plotly
+           clips it to the plot area: what stays visible is the *tail* of the list — the
+           near-zero classes — while the strongest events sit above the top edge. Hide it
+           and draw a compact, top-heavy tooltip in JS instead (see the hover handler). */
+        #plot .hoverlayer g.legend {{ display: none; }}
+        #hoverTip {{ position: absolute; display: none; pointer-events: none; z-index: 20; }}
         #controls {{ margin-bottom: 15px; padding: 10px; background: #eee; border-radius: 8px; }}
         .header {{ margin-bottom: 15px; border-left: 5px solid #2563eb; padding-left: 15px; }}
         #mediaPlayer {{ width: 100%; max-width: 100%; display: block; }}
@@ -794,9 +906,9 @@ def sound_event_detection(args):
             }},
             yaxis: {{ title: 'Probability', range: [0, 1], gridcolor: '#eee' }},
             legend: {{ orientation: 'h', y: -0.2 }},
-            // Rows in the unified hover are listed in trace order (AudioSet vocabulary
-            // index) by default, which says nothing about what is happening. Plotly's
-            // native hoversort ranks them by value at the hovered frame instead.
+            // Unified hover supplies the spike line and the hover events; its own legend
+            // is hidden by CSS (see the style block) because it cannot fit 100+ traces.
+            // hoversort is kept so rows stay value-ranked if the legend is ever shown.
             hovermode: 'x unified', hoversort: 'value descending',
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             margin: {{ t: 50, b: 100, l: 60, r: 20 }}
@@ -824,6 +936,8 @@ def sound_event_detection(args):
                 mediaPlayer.play();
             }}
         }});
+
+        {hover_tooltip_js}
     </script>
     </body>
     </html>
@@ -1223,12 +1337,14 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.13.2") 
+    print(f"Eventogrammer, version 6.13.3") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
     print(f"* Dashboard default visibility is now data-driven (per-class peak >= 0.05) instead of")
     print(f"  AudioSet vocabulary index 0-9, which showed only the speech block.")
-    print(f"* Unified hover is sorted by value (layout.hoversort, needs plotly >= 6.8).")
+    print(f"* Hover now shows a compact top-12 tooltip, strongest classes first. The native")
+    print(f"  'x unified' legend is hidden: with 100+ drawn traces it grew taller than the")
+    print(f"  plot and Plotly clipped it, leaving only the least probable tail visible.")
     print(f"* summary_events.csv uses an absolute 0.02 floor; it no longer inherits the")
     print(f"  eventogram's top-10 ranking, which silently dropped faint events.")
     print(f"* Skip logic now checks every artifact, so a rerun with no video flags really")
