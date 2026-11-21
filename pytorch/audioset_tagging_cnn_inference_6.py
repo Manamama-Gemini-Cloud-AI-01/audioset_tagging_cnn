@@ -20,6 +20,7 @@
 
 import os
 import sys
+import atexit
 import numpy as np
 import argparse
 import matplotlib
@@ -73,8 +74,113 @@ from models import *
 from pytorch_utils import move_data_to_device
 import config
 
-    
+# ---------------------------------------------------------------------------
+# STAGES — named, ordered pipeline stages, used only for log banners.
+#
+# Numbers were dropped on purpose: they encoded history (a reordered dashboard
+# left "PHASE 12" between "PHASE 9" and "PHASE 10"), so renumbering was a
+# manual chore every time a stage moved. Keys are stable identifiers; the
+# banner number is computed from this list, so reordering is a one-line edit.
+# The label is what you quote when reporting a broken run.
+# ---------------------------------------------------------------------------
+STAGES = [
+    ("setup",       "Setup & Environment"),
+    ("idempotency", "Idempotency Check"),
+    ("model",       "Model Loading"),
+    ("sanitize",    "Media Integrity & Recovery (Sanitary Gate)"),
+    ("cfr",         "VFR Check & Constant Frame Rate"),
+    ("probe",       "Metadata Probe"),
+    ("inference",   "Chunked Model Inference"),
+    ("aggregate",   "Result Aggregation"),
+    ("eventogram",  "Static Eventogram (PNG)"),
+    ("dashboard",   "Interactive Plotly Dashboard"),
+    ("summary",     "AI-Friendly Event Summary"),
+    ("delta",       "Detailed Event Delta Map"),
+    ("render",      "Video Rendering"),
+]
+_STAGE_INDEX = {key: i for i, (key, _) in enumerate(STAGES)}
 
+
+def stage(key):
+    """Print the banner for a named stage. See STAGES above."""
+    i = _STAGE_INDEX[key]
+    print(f"\n\033[1;36m[{i + 1}/{len(STAGES)}] {STAGES[i][1]}\033[0m")
+
+
+def stage_skip(key, reason="skipped"):
+    """Print a named stage's banner with a skip note, so the log still shows the slot."""
+    i = _STAGE_INDEX[key]
+    print(f"\n\033[1;36m[{i + 1}/{len(STAGES)}] {STAGES[i][1]} — {reason}\033[0m")
+
+
+# ---------------------------------------------------------------------------
+# THRESHOLDS — the single home for "what counts as a real event".
+#
+# These numbers used to be scattered across five places (PNG, CSV, delta JSON,
+# dashboard payload, hover JS) with no shared definition, so "significance"
+# meant something slightly different at each consumer. One dict, one place to
+# audit. Keys are named by ROLE, not by value: two consumers that happen to
+# share 0.05 today are still separate decisions and can drift apart on purpose.
+# ---------------------------------------------------------------------------
+THRESHOLDS = {
+    # Static eventogram PNG
+    "eventogram_top_k": 10,          # rows drawn in the PNG heatmap
+    # summary_events.csv (block segmentation)
+    "csv_include_peak": 0.02,        # class enters the CSV if its peak reaches this
+    "csv_onset": 0.01,               # block starts when probability reaches this
+    "csv_offset": 0.01,              # block ends when probability drops below this
+    "csv_min_seconds": 0.5,          # blocks shorter than this are dropped
+    "csv_top_per_class": 3,          # strongest blocks exported per class
+    # detailed_events_delta_ai_attention_friendly.json
+    "delta_include_prob": 0.05,      # frame is recorded above this; below is skipped
+    # interactive_dashboard.html
+    "dashboard_visible_peak": 0.05,  # trace drawn by default if its peak reaches this
+    "hover_floor": 0.005,            # hover rows below this are treated as silence
+    "hover_rows": 12,                # hover rows shown before the "… N more" line
+}
+
+# Sanitized audio is transient. The CBR MP3 is only needed while the model or a
+# video render reads it, so it is written to the system temp directory and deleted
+# at the end of the run. No cache: the transcode takes seconds, and a cached copy
+# would just waste space in the artifact folder. A dashboard-only rerun skips the
+# transcode entirely instead of reusing a cache.
+def build_sanitized_audio(source_path, base_name):
+    """Transcode the source to a transient CBR MP3 and return its path."""
+    audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
+    register_scratch(audio_path)
+    # `-f mp3` is explicit: ffmpeg infers the muxer from the extension, and a
+    # suffix without a known format fails with "Unable to find a suitable output
+    # format" (the reason the first version of this cache builder crashed).
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_path,
+                    '-c:a', 'libmp3lame', '-b:a', '41k', '-f', 'mp3', audio_path, '-y'], check=True)
+    return audio_path
+
+
+# Scratch files are intermediates, never artifacts. They are registered as they
+# are created and removed at exit as well as at the end of the happy path, so a
+# crash mid-run cannot leave a multi-GB CFR video, CBR MP3 or recovery file
+# behind. Nothing here is cached between runs.
+_SCRATCH_FILES = []
+
+
+def register_scratch(path):
+    """Track an intermediate file for removal at exit; returns the path."""
+    if path:
+        _SCRATCH_FILES.append(path)
+    return path
+
+
+def cleanup_scratch():
+    """Remove every registered intermediate that still exists."""
+    for path in _SCRATCH_FILES:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError as e:
+            print(f"\033[1;33mWarning: could not remove {path}: {e}\033[0m")
+
+
+atexit.register(cleanup_scratch)
 
 
 def get_media_metadata(input_media_path):
@@ -302,7 +408,7 @@ def audio_tagging(args):
     return clipwise_output, labels
 
 def sound_event_detection(args):
-    # --- PHASE 0: Setup & Environment ---
+    stage('setup')
     video_fps = args.video_fps
     ui_fps = args.ui_fps  # Fixed constant for internal resolution
     adaptive_lookahead = args.adaptive_lookahead
@@ -312,7 +418,7 @@ def sound_event_detection(args):
     hop_size = args.hop_size
     inference_fps = sample_rate // hop_size # Typically 100
     
-    top_k = 10  # Number of top events to track/visualize
+    top_k = THRESHOLDS['eventogram_top_k']  # Number of top events to track/visualize
     fig_width_px, fig_height_px, dpi = 1280, 480, 100
     
     mel_bins = args.mel_bins
@@ -353,7 +459,7 @@ def sound_event_detection(args):
     summary_csv_path = os.path.join(output_dir, 'summary_events.csv')
     json_ai_path = os.path.join(output_dir, 'detailed_events_delta_ai_attention_friendly.json')
 
-    # --- PHASE 2: Idempotency Check ---
+    stage('idempotency')
     
     # Efficiently probe all metadata once
     duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
@@ -392,9 +498,9 @@ def sound_event_detection(args):
         print(f"\033[1;31mWarning: Insufficient disk space ({disk_usage.free / 1e9:.2f} GB free). It may fail...\033[0m")
         #return
     
-    # --- PHASE 3: Model Loading (Only if inference needed) ---
     model = None
     if not skip_inference:
+        stage('model')
         Model = eval(model_type)
         model = Model(sample_rate=sample_rate, window_size=window_size, 
                       hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
@@ -407,27 +513,39 @@ def sound_event_detection(args):
         except Exception as e:
             print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
             return
+    else:
+        stage_skip('model', 'skipped; probabilities come from the existing HDF5')
 
-    # --- PHASE 4: Media Integrity & Recovery (Sanitary Gate) ---
-    duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)    
-    # Always re-encode to CBR MP3 to fix seekability/drift issues
-    print(f"🎬  Re-encoding input to CBR MP3 for stability of the chunk seeking...")
-    temp_audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
-    subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', source_media, '-c:a', 'libmp3lame', '-b:a', '41k', temp_audio_path, '-y'], check=True)
-    inference_media = temp_audio_path
-    # Refresh duration and metadata for the sanitized file
+    stage('sanitize')
+    duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
 
+    # Audio is only needed when the model runs or when a video is rendered. A
+    # dashboard/CSV-only rerun needs neither, so it must not pay for a full
+    # transcode (that was the "a dashboard tweak costs six minutes" bug).
+    needs_audio = (not skip_inference) or bool(video_outputs)
+
+    # CBR MP3: the chunked decoder needs consistent seekability, so the source is
+    # normalised to a 41 kbps CBR MP3 for the duration of this run. The file is
+    # transient (system temp, deleted at exit), not a cache: the transcode takes
+    # seconds, and a stored copy would waste space in the artifact folder. A run
+    # that skips inference and requests no video skips the transcode entirely.
+    if not needs_audio:
+        print("⏭  No inference and no video requested; skipping the audio transcode.")
+    else:
+        print(f"🎬  Re-encoding input to CBR MP3 for stability of the chunk seeking...")
+        inference_media = build_sanitized_audio(source_media, base_name)
 
     # Fallback Recovery: If duration is still unknown/0 (e.g. corrupt header),
     # attempt emergency recovery. `not duration` also catches None, which would
     # otherwise blow up later as int(None).
+    recovered_path = None
     if not duration:
         print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting emergency recovery...\033[0m")
-        mp3_path = os.path.join(tempfile.gettempdir(), f"{base_name}_recovered.mp3")
+        recovered_path = register_scratch(os.path.join(tempfile.gettempdir(), f'{base_name}_recovered.mp3'))
 
         try:
-            subprocess.run(['ffmpeg', '-i', inference_media, '-y', mp3_path], check=True, capture_output=True)
-            inference_media = mp3_path # Rest of the script uses this recovered file
+            subprocess.run(['ffmpeg', '-i', inference_media, '-y', recovered_path], check=True, capture_output=True)
+            inference_media = recovered_path # Rest of the script uses this recovered file
             duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(inference_media)
             
             if duration is None or duration == 0:
@@ -441,27 +559,30 @@ def sound_event_detection(args):
         video_width, video_height = 1280, 720
         print(f"\033[1;33mWarning: Video dimensions not detected, using default 1280x720.\033[0m")
     
-    # --- PHASE 5: VFR Check & Constant Frame Rate Sanitization ---
-    temp_video_path = None
-    if is_video and r_fps and probed_video_fps:
-        if abs(r_fps - probed_video_fps) > 0.01:
-            print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{probed_video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
-            temp_video_path = os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4')
-            target_fps = probed_video_fps if probed_video_fps > 0 else video_fps
-            # --- FFmpeg Compatibility Note ---
-            # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
-            # Rationale: '-fps_mode' was introduced in FFmpeg 5.1 (late 2022). 
-            # Many stable systems (like Ubuntu 20.04) still use FFmpeg 4.x, which only 
-            # recognizes '-vsync'. While '-vsync' is deprecated in FFmpeg 5.1+, it 
-            # remains a functional alias in FFmpeg 6.x/7.x. 
-            # If a future FFmpeg version (e.g., v10+) removes '-vsync', switch this back 
-            # to: '-fps_mode', 'cfr'
-            subprocess.run([
-                'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-vsync', '1', '-c:a', 'aac', temp_video_path, '-y'
-            ], check=True)
-            inference_media = temp_video_path
+    if needs_audio:
+        stage('cfr')
+        temp_video_path = None
+        if is_video and r_fps and probed_video_fps:
+            if abs(r_fps - probed_video_fps) > 0.01:
+                print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{probed_video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
+                temp_video_path = register_scratch(os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4'))
+                target_fps = probed_video_fps if probed_video_fps > 0 else video_fps
+                # --- FFmpeg Compatibility Note ---
+                # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
+                # Rationale: '-fps_mode' was introduced in FFmpeg 5.1 (late 2022). 
+                # Many stable systems (like Ubuntu 20.04) still use FFmpeg 4.x, which only 
+                # recognizes '-vsync'. While '-vsync' is deprecated in FFmpeg 5.1+, it 
+                # remains a functional alias in FFmpeg 6.x/7.x. 
+                # If a future FFmpeg version (e.g., v10+) removes '-vsync', switch this back 
+                # to: '-fps_mode', 'cfr'
+                subprocess.run([
+                    'ffmpeg', '-loglevel', 'warning', '-i', inference_media, '-r', str(target_fps), '-vsync', '1', '-c:a', 'aac', temp_video_path, '-y'
+                ], check=True)
+                inference_media = temp_video_path
+    else:
+        stage_skip('cfr', 'skipped; no audio needed')
 
-    # --- PHASE 6: Metadata Probe (Surgical Load Preparation) ---
+    stage('probe')
     # Get Native Sample Rate via ffprobe (O(1) memory safety)
     cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate", "-of", "default=noprint_wrappers=1:nokey=1", inference_media]
     try:
@@ -495,17 +616,14 @@ def sound_event_detection(args):
     framewise_ui_buffer = np.zeros((num_ui_frames, len(labels)), dtype=np.float32)
     current_ui_row = 0
 
-    # --- PHASE 7: Chunked Model Inference (Memory-Safe & Surgical) ---
-    avail_ram = psutil.virtual_memory().available / (1024 * 1024)
-    print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
-    print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
-
     if not skip_inference:
+        stage('inference')
+        avail_ram = psutil.virtual_memory().available / (1024 * 1024)
+        print(f"📊  Starting decoupled inference in {chunk_duration/60}m chunks. (RAM Avail: {avail_ram:.0f} MB)")
+        print(f"    Native SR: {native_sr} Hz | Inference SR: {sample_rate} Hz")
+
         # Pre-calculate total rows to enable pre-allocation.
         # ONE resolution for the whole pipeline: the max-pooled UI/analysis grid.
-        if args.log_fps != args.ui_fps:
-            print(f"\033[1;33mNote: --log_fps ({args.log_fps}) and --ui_fps ({args.ui_fps}) differ; "
-                  f"the unified master dataset uses ui_fps ({args.ui_fps} Hz).\033[0m")
         total_rows_est = int(np.ceil(duration * effective_ui_fps))
 
         # Chunked + LZF. h5py docs: lzf is "available with every installation of
@@ -650,8 +768,10 @@ def sound_event_detection(args):
                 print(f'Copied AI analysis guide to: \033[1;34m{guide_dest_path}\033[1;0m')
         except Exception as e:
             print(f'\033[1;33mWarning: Failed to copy AI analysis guide: {e}\033[0m')
+    else:
+        stage_skip('inference', 'skipped; the HDF5 already holds the probabilities')
 
-    # --- PHASE 8: Result Aggregation & Metadata Consolidation ---
+    stage('aggregate')
     if not skip_inference:
         # The in-RAM buffer holds the exact rows already written to the H5 master,
         # so use it directly instead of re-reading gigabytes from disk.
@@ -681,7 +801,7 @@ def sound_event_detection(args):
     print(f'Aggregation complete. Internal UI resolution: \033[1;34m{effective_ui_fps:.4f} Hz (Data Frames)\033[1;0m')
     print(f'Final analysis duration: \033[1;34m{duration:.2f}s\033[1;0m')
 
-    # --- PHASE 9: Static Eventogram Generation (PNG) ---
+    stage('eventogram')
     sorted_indexes = np.argsort(np.max(framewise_output, axis=0))[::-1]
     top_result_mat = framewise_output[:, sorted_indexes[0:top_k]]
     top_labels = np.array(labels)[sorted_indexes[0:top_k]]
@@ -717,7 +837,7 @@ def sound_event_detection(args):
     plt.savefig(fig_path, bbox_inches='tight', pad_inches=0); plt.close(fig)
     print(f'Saved eventogram PNG to: \033[1;34m{fig_path}\033[1;0m')
 
-    # --- PHASE 12: Interactive Plotly Dashboard (All Events) ---
+    stage('dashboard')
     print("📊  Generating interactive Plotly dashboard (All Classes)…")
 
     # Pass all classes to allow forensic search, not just top 50
@@ -751,8 +871,8 @@ def sound_event_detection(args):
         // while the strongest events sit above the top edge. The native legend is hidden
         // in CSS and this handler draws a compact tooltip instead: the strongest classes
         // at the hovered frame, ranked descending (the "top-heavy" reading order).
-        const HOVER_ROWS = 12;        // rows shown in the tooltip
-        const HOVER_FLOOR = 0.005;    // ignore probabilities below this (noise floor)
+        const HOVER_ROWS = TH.hover_rows;        // rows shown in the tooltip
+        const HOVER_FLOOR = TH.hover_floor;      // ignore probabilities below this (noise floor)
 
         const hoverTip = document.createElement('div');
         hoverTip.id = 'hoverTip';
@@ -885,12 +1005,15 @@ def sound_event_detection(args):
     <div id="plot"></div>
     <script type="text/javascript">
         const data = {json_payload};
+        // Thresholds live in one place in the Python source (THRESHOLDS) and are
+        // injected here, so the dashboard can never drift from the CSV/JSON gates.
+        const TH = {json.dumps(THRESHOLDS)};
         // Default visibility must be data-driven. An ontology index (index < 10) selects the
         // first ten AudioSet classes (all speech-related), NOT the ten strongest detections.
         const peaks = data.traces.map(t => t.y.reduce((m, v) => (v > m ? v : m), 0));
         const traces = data.traces.map((t, index) => ({{
             x: data.times, y: t.y, name: t.name, mode: 'lines',
-            visible: peaks[index] >= 0.05 ? true : 'legendonly',
+            visible: peaks[index] >= TH.dashboard_visible_peak ? true : 'legendonly',
             line: {{ width: 2 }}
         }}));
         
@@ -945,53 +1068,62 @@ def sound_event_detection(args):
     with open(html_dashboard_path, 'w', encoding='utf-8') as f: f.write(html_content)
     print(f'Saved interactive dashboard to: \033[1;34m{html_dashboard_path}\033[1;0m')
 
-    # --- PHASE 10: AI-Friendly Summary Generation (Event Block Detection) ---
+    stage('summary')
     print("📊  Generating AI-friendly event summary files…")
     
-    # `framewise_output` is already in memory from Phase 8 (RAM buffer on a fresh
+    # `framewise_output` is already in memory from the aggregate stage (RAM buffer on a fresh
     # run, HDF5 on a skipped one); only the timestamps still need reading.
     with h5py.File(h5_path, 'r') as hf:
         timestamps = hf['timestamps'][:]
         
-    # Event detection heuristics
-    onset_threshold, offset_threshold = 0.01, 0.01
-    min_event_duration_seconds = 0.5 
-    top_n_per_class = 3 # Only export the strongest N events per class
+    # Event detection heuristics — see THRESHOLDS at the top of this file.
+    onset_threshold = THRESHOLDS['csv_onset']
+    offset_threshold = THRESHOLDS['csv_offset']
+    min_event_duration_seconds = THRESHOLDS['csv_min_seconds']
+    top_n_per_class = THRESHOLDS['csv_top_per_class']
 
     # Inclusion gate: an absolute floor, not the top-10-by-peak list.
     # Ranking and inclusion are separate decisions. Gating on top_labels silently deleted
     # every event outside the eventogram's top rows (e.g. the Explosion in this clip).
-    event_floor = 0.02
+    event_floor = THRESHOLDS['csv_include_peak']
     peak_by_label = framewise_output.max(axis=0)
     event_labels = [labels[i] for i in np.where(peak_by_label >= event_floor)[0]]
 
     events_by_class = {label: [] for label in event_labels}
+    frame_dt = 1.0 / effective_ui_fps if effective_ui_fps else 0.0
 
-    # Identify continuous blocks of sound for every class above the floor
+    def emit_block(label, label_idx, start_idx, end_idx):
+        """Record one contiguous block. end_idx is exclusive."""
+        start_time = timestamps[start_idx]
+        end_time = timestamps[end_idx] if end_idx < len(timestamps) else timestamps[-1] + frame_dt
+        duration_secs = end_time - start_time
+        if duration_secs < min_event_duration_seconds:
+            return
+        block_probs = framewise_output[start_idx:end_idx, label_idx]
+        events_by_class[label].append({
+            'sound_class': label,
+            'start_time_seconds': round(float(start_time), 3),
+            'end_time_seconds': round(float(end_time), 3),
+            'duration_seconds': round(float(duration_secs), 3),
+            'peak_probability': float(np.max(block_probs)),
+            'average_probability': float(np.mean(block_probs)),
+        })
+
+    # Identify continuous blocks of sound for every class above the floor.
+    # A block still open at the last frame must be closed too: it used to be
+    # silently dropped, so an event running to end-of-file never reached the CSV.
     for label_idx, label in enumerate(labels):
         if label not in events_by_class: continue
-        
+
         in_event, event_start_idx = False, 0
         for idx, prob in enumerate(framewise_output[:, label_idx]):
             if not in_event and prob > onset_threshold:
                 in_event, event_start_idx = True, idx
             elif in_event and prob < offset_threshold:
                 in_event = False
-                
-                start_time = timestamps[event_start_idx]
-                end_time = timestamps[idx]
-                duration_secs = end_time - start_time
-                
-                if duration_secs >= min_event_duration_seconds:
-                    event_block_probs = framewise_output[event_start_idx:idx, label_idx]
-                    events_by_class[label].append({
-                        'sound_class': label,
-                        'start_time_seconds': round(float(start_time), 3),
-                        'end_time_seconds': round(float(end_time), 3),
-                        'duration_seconds': round(float(duration_secs), 3),
-                        'peak_probability': float(np.max(event_block_probs)),
-                        'average_probability': float(np.mean(event_block_probs))
-                    })
+                emit_block(label, label_idx, event_start_idx, idx)
+        if in_event:
+            emit_block(label, label_idx, event_start_idx, len(framewise_output))
 
     # Consolidate and sort top events chronologically
     top_events = []
@@ -1007,14 +1139,14 @@ def sound_event_detection(args):
         writer.writeheader(); writer.writerows(final_sorted_events)
     print(f'Saved summary events CSV to: \033[1;34m{summary_csv_path}\033[1;0m')
 
-    # --- PHASE 11: Detailed AI-Friendly Event Delta Map (RLE Compression) ---
+    stage('delta')
     # This format is optimized for AI attention mechanisms: it uses Run-Length Encoding (RLE)
     # and probability deltas to focus on "attacks" and "decays".
     print("📊  Generating detailed AI-friendly event delta JSON (RLE optimized)…")
-    ai_threshold = 0.05
+    ai_threshold = THRESHOLDS['delta_include_prob']
     events_derivative = collections.defaultdict(list)
     
-    # We already loaded framewise_output in Phase 10
+    # We already loaded framewise_output in the summary stage
 
     def zip_trace(trace):
         """Compress trace by replacing consecutive zeros with a skip marker."""
@@ -1073,7 +1205,7 @@ def sound_event_detection(args):
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
     print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
 
-    # --- PHASE 13: Video Rendering Pipeline (Data-Synchronous & Cached) ---
+    stage('render')
     if args.dynamic_eventogram or args.static_eventogram:
         print(f"🎞  Initializing video rendering pipeline ({video_fps} FPS)…")
         
@@ -1231,7 +1363,7 @@ def sound_event_detection(args):
         print(f"✅ Saved eventogram video to: \033[1;34m{output_video_path}\033[1;0m")
         if args.dynamic_eventogram: plt.close(fig_fr)
 
-        # --- PHASE 14: FFmpeg Overlay (Video-on-Video) ---
+        # --- FFmpeg Overlay (Video-on-Video) ---
         if is_video:
             print("🎬  Overlaying the source media with the created eventogram…")
             final_overlay_path = f"{os.path.splitext(output_video_path)[0]}_overlay.mp4"
@@ -1264,11 +1396,14 @@ def sound_event_detection(args):
                 print(f"✅ 🎥 Final overlay saved to: \033[1;34m{final_overlay_path}\033[1;0m")
             except subprocess.CalledProcessError as e:
                 print(f"\033[1;31mError during FFmpeg overlay: {e}\033[0m")
-            
-            # Cleanup temporary CFR file if created
-            if temp_video_path and os.path.exists(temp_video_path): os.remove(temp_video_path)
         else:
             print("🎧 Source is audio-only, skipping video overlay.")
+
+    # Intermediates are never artifacts: drop the temporary CFR video, CBR MP3 and
+    # recovery file now. cleanup_scratch() is also registered at exit, so a crash
+    # mid-run cannot leave a multi-GB intermediate behind. Nothing is cached
+    # between runs.
+    cleanup_scratch()
 
     print(f"⏲  🗃️  Analysis finished. Input duration: \033[1;34m{duration:.2f}s\033[0m")
 
@@ -1303,25 +1438,19 @@ if __name__ == '__main__':
                         help='Generate dynamic eventogram with scrolling window (slower to generate)')
     parser.add_argument('--static_eventogram', action='store_true', default=False,
                         help='Generate static eventogram with a scrolling marker (faster to generate)')
-    parser.add_argument('--no-shapash', action='store_true', default=False,
-                        help='Accepted and ignored. This script never launches Shapash; '
-                             'audio_me.sh does, and only when given its own --shapash flag. '
-                             'Kept so existing command lines do not break.')
-                        
+
     parser.add_argument('--crf', type=int, default=23, help='FFmpeg CRF value (0-51, lower is higher quality)')
     parser.add_argument('--bitrate', type=str, default=None, help='FFmpeg video bitrate (e.g., "2000k" for 2 Mbps)')
     parser.add_argument('--window_duration', type=float, default=30.0,
                         help='Duration of sliding window for the dynamic eventogram (in seconds)')
     parser.add_argument('--use_adaptive_window', action='store_true', default=False,
                         help='Use adaptive window size based on the event boundaries')
-    parser.add_argument('--log_fps', type=int, default=5,
-                        help='Data frames per second (Hz) to write to full_event_log.h5. '
-                             'Note: Values > 5 are DECEPTIVE/GIGO as the model (Cnn14_DecisionLevelMax) '
-                             'only "thinks" at ~3.125 Hz native resolution due to internal pooling layers. '
-                             'High values only increase file size with redundant data. RTFM README for details.')
     parser.add_argument('--ui_fps', type=int, default=5,
-                        help='Data frames per second (Hz) for internal RAM-based visualization data. '
-                             'Note: Subject to the same ~3.125 Hz native resolution bottleneck as log_fps.')
+                        help='Data frames per second (Hz) for the single master grid used by the '
+                             'HDF5, the dashboard, the PNG and the CSV/JSON. '
+                             'Note: Values > 5 are DECEPTIVE/GIGO as the model (Cnn14_DecisionLevelMax) '
+                             'only "thinks" at ~3.125 Hz native resolution due to internal pooling layers; '
+                             'high values only inflate the artifacts with redundant data.')
     parser.add_argument('--video_fps', type=int, default=30,
                         help='FPS for the final rendered video output')
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
@@ -1337,23 +1466,20 @@ if __name__ == '__main__':
                         
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
  
-    print(f"Eventogrammer, version 6.13.3") 
+    print(f"Eventogrammer, version 6.14.0") 
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
-    print(f"* Dashboard default visibility is now data-driven (per-class peak >= 0.05) instead of")
-    print(f"  AudioSet vocabulary index 0-9, which showed only the speech block.")
-    print(f"* Hover now shows a compact top-12 tooltip, strongest classes first. The native")
-    print(f"  'x unified' legend is hidden: with 100+ drawn traces it grew taller than the")
-    print(f"  plot and Plotly clipped it, leaving only the least probable tail visible.")
-    print(f"* summary_events.csv uses an absolute 0.02 floor; it no longer inherits the")
-    print(f"  eventogram's top-10 ranking, which silently dropped faint events.")
-    print(f"* Skip logic now checks every artifact, so a rerun with no video flags really")
-    print(f"  regenerates a missing dashboard/CSV/PNG/JSON instead of exiting silently.")
-    print(f"* Media player added to plotly graph. ")
-    print(f"* H5py used instead of CSV to save disk space.")
-    print(f"* We convert all files to MP3")
-    print(f"* Load: Memory-safe chunked decoding (OOM Fix for 10h+ files).")
-    print(f"* Constants Promoted: ui_fps, video_fps, and adaptive_lookahead are now CLI arguments.")
+    print(f"* One master grid (--ui_fps) feeds the HDF5, PNG, dashboard, CSV and JSON; the")
+    print(f"  former --log_fps duplicate stream is gone. --log_fps/--no-shapash were removed.")
+    print(f"* Significance thresholds live in one THRESHOLDS dict, injected into the dashboard")
+    print(f"  so the HTML, CSV and JSON gates cannot drift apart.")
+    print(f"* The sanitized CBR MP3 is written to the system temp dir and deleted after the")
+    print(f"  run; a rerun that skips inference and video skips the transcode entirely.")
+    print(f"* A sound event still open at the last frame is now closed and written to the CSV")
+    print(f"  (it used to be dropped silently).")
+    print(f"* Dashboard hover is a compact top-N tooltip, strongest first; the native unified")
+    print(f"  legend was clipped on long vocabularies and showed only the least probable tail.")
+    print(f"* Pipeline stages are named (see STAGES) and logged as [n/N] banners.")
     print()
 
     print(f"Note on the models:")   
@@ -1372,7 +1498,7 @@ if __name__ == '__main__':
     print(f"If the file is too long, use FFmpeg to segment it first:") 
     print(f"mkdir split_input_media && cd split_input_media && \\")
     print(f"ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
-    print(f"time bash -c 'for file in ""*; do bash audio_me.sh \"$file\" --dynamic_eventogram; done'")
+    print(f"time bash -c 'for file in *; do bash audio_me.sh \"$file\" --dynamic_eventogram; done'")
     print()
 
     print("Tips & Environment Hacks:")

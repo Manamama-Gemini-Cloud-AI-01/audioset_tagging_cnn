@@ -28,16 +28,16 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 1. **Argument Parsing:** The script takes several command-line arguments, with `audio_path`, `model_type`, and `checkpoint_path` being mandatory.
 2. **Device Selection:** It automatically selects a CUDA device if available, otherwise falls back to CPU.
 3. **Output Directory:** It creates a unique output directory named after the input file (e.g., `my_video.mp4_audioset_tagging_cnn/`).
-4. **Media Probing (`get_duration_and_fps`):** It uses `ffprobe` to extract critical metadata from the input file, including duration, FPS, and resolution. This information is vital for the subsequent visualization steps.
+4. **Media Probing (`get_media_metadata`):** It uses `ffprobe` to extract critical metadata from the input file, including duration, FPS, and resolution. This information is vital for the subsequent visualization steps.
 5. **VFR Check:** It checks for Variable Frame Rate (VFR) video. If detected, it re-encodes the video to a Constant Frame Rate (CFR) temporary file to prevent audio/video synchronization issues in the final render. This is a critical robustness feature.
 
 ### Step 2: Model Inference
 
 1. **Model Loading:** It loads the specified PANNs model (e.g., `Cnn14_DecisionLevelMax`) and the pretrained weights from the checkpoint file.
-2. **Audio Loading & Resampling:** It uses `torchaudio` to load the audio from the media file, converts it to mono, and resamples it to the model's required sample rate (e.g., 32000 Hz).
+2. **Audio Loading & Resampling:** It uses `torchcodec` (falling back to `torchaudio`) to decode the audio, converts it to mono, and resamples it to the model's required sample rate (e.g., 32000 Hz).
 3. **Chunked Processing:** To handle long audio files without running out of memory, the script processes the audio in 3-minute chunks. It iterates through the waveform, feeding each chunk to the model.
 4. **Inference:** For each chunk, the model outputs a `framewise_output` tensor, which is a matrix of `(time_steps, classes_num)` containing the probability of each of the 527 sound classes for each frame.
-5. **Concatenation:** The results from all chunks are concatenated into a single, large `framewise_output` matrix representing the entire audio duration.
+5. **Max-Pooling to the Master Grid:** Each chunk's raw frames are max-pooled down to the single `--ui_fps` grid (peak-preserving, so short transients survive) and written simultaneously to the HDF5 master and to the in-RAM buffer, so the two cannot diverge.
 
 ### Step 3: Visualization and Data Export
 
@@ -204,43 +204,6 @@ curl -s "https://huggingface.co/api/papers/search?q=audio+classification+AudioSe
 curl -s -H "Accept: text/markdown" "https://huggingface.co/papers/2306.00830"
 ```
 
-## 9. Memory-Efficient Architecture & Aesthetic Decoupling (v6.12.3 Update)
-
-To handle long-form recordings (e.g., >10 hours) and ensure high-fidelity visualization, the inference script uses a **Dual-Stream Data Architecture**. This "Aesthetic Decoupling" prevents forensic data settings from distorting visual outputs.
-
-### 1. The Dual-Stream Pipeline
-
-The script maintains two separate data paths to optimize for different goals:
-
-* **The Forensic Stream (HDF5):**
-  
-  * **Source:** Direct inference output at `csv_fps` (Default 5 Hz, up to 100 Hz).
-  * **Destination:** `full_event_log.h5`.
-  * **Purpose:** Scientific record for downstream analysis (Shapash, AI training).
-  * **Persistence:** High-resolution probability matrices and precise timestamps.
-
-* **The Visual Stream (RAM Buffer & HDF5 `framewise_viz`):**
-  
-  * **Source:** Max-pooled inference output at `effective_viz_fps` (capped to ~2500 horizontal columns).
-  * **Destination:** Static Eventogram (PNG) and Interactive Dashboard (Plotly).
-  * **Purpose:** Smooth, time-aligned visualization for human "Acoustic Archeology."
-  * **Stability Fix:** This stream is generated *before* Phase 10 reloads high-res data, ensuring the "Staircase/Blockiness" bug (caused by sampling rate mismatches) is eliminated.
-
-### 2. The "TorchCodec" Engine (v6.12.3)
-
-The project has moved beyond `soundfile` and `torchaudio.load()` for chunked processing.
-
-- **Surgical Decoding:** We now use `torchcodec.decoders.AudioDecoder` for sample-accurate, O(1) seeking. 
-- **Direct Tensor I/O:** Audio is decoded directly into PyTorch tensors, eliminating the overhead of NumPy conversion and minimizing memory pressure.
-- **Constant Memory Profile:** RAM usage remains flat (approx. 2.4 GB RSS for the WALL-E test case) regardless of the file duration, as only active 3-minute chunks are decoded and processed at a time.
-
-### 3. HDF5 Persistence & Skip-Inference Path
-
-Visualization fidelity is now preserved across reruns:
-
-- **Metadata Persistence:** `effective_viz_fps` and the `framewise_viz` buffer are stored as HDF5 attributes/datasets.
-- **Skip Logic:** When skipping inference, the script reloads the `framewise_viz` stream specifically for Plotly and PNG generation, ensuring identical visual results even if `--csv_fps` was modified between runs.
-
 ## 10. HDF5 Bottleneck Removal (CPU Saturation)
 
 To achieve 100% CPU utilization (800% on 8 cores), the HDF5 logging pipeline was optimized:
@@ -261,6 +224,11 @@ On Android/Termux (aarch64) with the `master` stable branch (CBR MP3 + HDF5 Visu
 - **Throughput:** ~3.2x real-time speed (1.5 hours of audio analyzed in ~26 minutes).
 - **RAM Footprint:** ~3.8 GB Peak RSS (Comfortably within 5.7 GB RAM limit).
 - **Stability:** CBR pre-encoding + HDF5 persistence eliminates decoder-drift and 'libmpg123' sync errors on long-form (1h+) media.
+
+Measured 2026-11-21 on the 4-thread i5-5200U host (56-minute video, no video flags):
+
+- **Full run:** 7:23 wall clock (~7.6x real-time), 139% CPU, 2.2 GB peak RSS, 0 swaps.
+- **Dashboard-only rerun** (HDF5 present, one artifact deleted): ~18 s, with the model and the audio transcode both skipped.
 
 
 
@@ -317,7 +285,7 @@ This directly explains why the real inference loop runs ~2x faster in Proot even
 Historically, the interactive Plotly dashboard exhibited "blocky" or "staircase" shaped traces. 
 
 - **The Cause:** A "State Mismatch" where the Plotly phase was accidentally using high-resolution forensic data (100 Hz) but attempting to plot it against a low-resolution visualization timeline (5 Hz).
-- **The Fix:** Phase 12 (Plotly) was moved to immediately follow Phase 9 (PNG), ensuring it uses the **Aesthetic/Visualization Stream** before any forensic data reloads occur. This ensures organic, smooth, and time-accurate traces.
+- **The Fix:** The dashboard stage was moved to immediately follow the eventogram stage, so it uses the single master grid before any forensic reloads occur. This ensures organic, smooth, and time-accurate traces.
 
 ### 4. Video Rendering Speed Hack (v6.6.3 Update)
 
@@ -390,9 +358,9 @@ While PANNs excel at identifying the **"Physical Reality"** (e.g., specific inst
 
 ## 14. Work Log (June 2026)
 
-- **Sanitized Video Handling:** Implemented a "Sanitary Audio Gate" (Phase 4) in `pytorch/audioset_tagging_cnn_inference_6.py` to automatically extract audio from video/non-supported containers to an intermediate MP3 using `ffmpeg`.
+- **Sanitized Video Handling:** Implemented a "Sanitary Audio Gate" (the `sanitize` stage) in `pytorch/audioset_tagging_cnn_inference_6.py` to automatically extract audio from video/non-supported containers to an intermediate MP3 using `ffmpeg`.
 - **TorchCodec Transition:** Replaced `soundfile` with `torchcodec` for sample-accurate, memory-efficient chunked audio decoding.
-- **Mandatory CBR Stabilization:** Enforced unconditional pre-processing of all input files to CBR MP3, eliminating MP3 seek-drift.
+- **CBR Stabilization:** All input files are pre-processed to CBR MP3 (41 kbps) to eliminate MP3 seek-drift. The transcode is transient: written to the system temp directory and deleted at the end of the run. It is skipped entirely when neither inference nor a video render is requested.
 - **HDF5 Visual Persistence:** Added `stft_viz` dataset to HDF5, ensuring background spectrogram visualization is preserved across reruns.
 - **Interactive Dashboard Enhancements:** Added "The Acoustic Explorer" functionality. Integrated HTML5 `<video>` player, CSS fixes for full width, and JavaScript for click-to-seek functionality from the Plotly graph.
 - **Documentation:** Updated `docs/auditory_cognition_guide_template.md` to reflect HDF5-based data storage and updated the CLI commands.
@@ -410,7 +378,7 @@ The primary model, `Cnn14_DecisionLevelMax`, is a 100 Hz "Container" built on a 
 
 ### 2. Deceptive High Resolution (The "Staircase" Effect)
 The model uses `nearest` neighbor interpolation to stretch its 3.125 Hz thoughts into a 100 Hz timeline.
-*   **The GIGO:** When running at `--log_fps 100`, the script records 100 frames per second, but **24 out of every 25 frames are identical copies** of the first one.
+*   **The GIGO:** When running at `--ui_fps 100`, the script records 100 frames per second, but **24 out of every 25 frames are identical copies** of the first one.
 *   **Visual Impact:** This creates "Minecraft-style" flat plateaus in Plotly and MP4 visualizations.
 *   **Resource Waste:** Setting FPS to 100 increases file sizes (HDF5, HTML) by 5-10x and rendering time by 10x, but provides **zero new forensic information**.
 
@@ -421,7 +389,7 @@ Future AI agents are strictly forbidden from attempting to "optimize" Plotly or 
 If forensic-grade temporal precision is required, the current `framewise_output` method must be abandoned in favor of:
 *   **Sliding Window SED:** Manually moving a 50ms window across the audio and running a **Global Tagging** model (`Cnn14`) on every step. This is computationally expensive but is the only way to recover sub-100ms "Acoustic DNA."
 
-**Current Recommendation:** Use `--log_fps 5 --ui_fps 5` for 99% of use cases. It is the only "Honest" setting for this architecture.
+**Current Recommendation:** Use `--ui_fps 5` for 99% of use cases. It is the only "Honest" setting for this architecture.
 
 ## Branching & Experimental Strategy
 
@@ -432,7 +400,7 @@ Tips & Environment Hacks:
 
 * For 'undefined symbol: torch_library_impl' or 'NotImplementedError':
   Run: pip install -U torch torchaudio torchcodec --extra-index-url https://download.pytorch.org/whl/cpu
-* All input audio files are now automatically re-encoded to CBR MP3 to ensure consistent seekability and prevent decoder drift issues.
+* All input audio files are pre-processed to CBR MP3 to ensure consistent seekability and prevent decoder drift issues. The transcode is transient (system temp, deleted after the run); it is skipped when neither inference nor a video render is requested.
 * If Torchcodec errors (e.g., 'libnvrtc.so.13 not found'), simply remove it:
   Run: pip uninstall torchcodec  (The script will safely fallback to FFmpeg)
 
@@ -443,3 +411,10 @@ Tips & Environment Hacks:
 - **Root Cause:** Deep ABI incompatibility between the Termux-provided `apt` packages (which seem to be pinned to older CPython/LLVM APIs) and the CPython 3.14 interpreter.
 - **Current Status:** Incompatible. Even patching Numba from source (cloned git repo) to bypass version guards fails due to structural changes in the Python 3.14 C-API.
 - **Recommendation:** Use a `venv` with a supported Python version (3.13) or run within a Debian Proot environment to maintain binary compatibility.
+
+## 17. Pipeline Stages, Thresholds & Transient Audio (v6.14)
+
+- **Stages are named, not numbered.** The script defines a `STAGES` list (`setup`, `idempotency`, `model`, `sanitize`, `cfr`, `probe`, `inference`, `aggregate`, `eventogram`, `dashboard`, `summary`, `delta`, `render`) and prints `[n/N] Label` banners. The old phase numbers encoded history (there was no Phase 1, and the dashboard ran as "Phase 12" before 10 and 11); reordering a stage is now a one-line edit. Quote the stage *name* when reporting a broken run.
+- **Thresholds live in one dict.** `THRESHOLDS` at the top of the script holds the significance gates for the PNG (`eventogram_top_k`), CSV (`csv_include_peak`, `csv_onset`, `csv_offset`, `csv_min_seconds`, `csv_top_per_class`), delta JSON (`delta_include_prob`) and dashboard (`dashboard_visible_peak`, `hover_floor`, `hover_rows`). The dashboard receives the dict as JSON, so HTML, CSV and JSON cannot drift apart. Keys are named by role, not value: two consumers that share 0.05 today are separate decisions.
+- **The sanitized audio is transient, not an artifact.** The CBR MP3 is written to the system temp directory and deleted at the end of the run; nothing is cached between runs. The transcode takes seconds, so a stored copy would only waste space. Scratch intermediates (CBR MP3, CFR video, recovery file) are registered and deleted at exit, so a crash cannot leave them behind.
+- **A trailing event is now closed.** A sound block still open at the last frame is written to `summary_events.csv`; it used to be dropped silently.
