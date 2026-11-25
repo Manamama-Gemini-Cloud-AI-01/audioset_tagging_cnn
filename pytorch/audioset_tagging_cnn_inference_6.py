@@ -2,24 +2,26 @@
 # See: origin https://github.com/qiuqiangkong/audioset_tagging_cnn, heavily modified.
 # Uses two .py files that should be in the same folder for imports: pytorch_utils.py and models.py.
 
-# AI EXECUTION CONTEXT WARNING:
-# This script is designed to be run from the PROJECT ROOT directory
-# (the parent directory of this `pytorch` folder).
+# PORTABLE ENTRY POINT — no shell wrapper, no `cd` requirement.
+# All repo-relative resources (metadata CSV, docs template, dashboard script)
+# are anchored to this file's location, so the script can be invoked from any
+# working directory and from any clone location.
 #
-# MANDATORY ACTION: The Current Working Directory (CWD) MUST be the project root.
-# This is because imported modules (like `config.py`) use relative paths
-# (e.g., 'metadata/class_labels_indices.csv') that are resolved from the CWD.
+# Single file:
+#   python3 pytorch/audioset_tagging_cnn_inference_6.py /path/to/video.mp4
+# Whole folder (model is loaded once, then reused for every file):
+#   python3 pytorch/audioset_tagging_cnn_inference_6.py -d /path/to/folder --recursive
 #
-# Correct execution example:
-# `cd /path/to/audioset_tagging_cnn/`
-# `python3 pytorch/audioset_tagging_cnn_inference_6.py /path/to/video.mp4 --checkpoint_path ...`
-#
-# Note: Paths provided as command-line arguments should be absolute to avoid ambiguity.
+# The model type and checkpoint are no longer mandatory: they default to the
+# "Cautious Listener" (Cnn14_DecisionLevelMax) and to the first checkpoint found
+# in the standard search path. `--help` lists everything.
 
 
 
 import os
 import sys
+import re
+import traceback
 import atexit
 import numpy as np
 import argparse
@@ -52,6 +54,10 @@ import csv
 import datetime
 import gc
 import time
+try:
+    import resource          # POSIX only; used for the peak-RSS report
+except ImportError:          # pragma: no cover - Windows is not a target
+    resource = None
 import subprocess
 import shutil
 import warnings
@@ -146,7 +152,7 @@ THRESHOLDS = {
 # transcode entirely instead of reusing a cache.
 def build_sanitized_audio(source_path, base_name):
     """Transcode the source to a transient CBR MP3 and return its path."""
-    audio_path = os.path.join(tempfile.gettempdir(), f'temp_cbr_{base_name}.mp3')
+    audio_path = scratch_path('cbr', base_name, 'mp3')
     register_scratch(audio_path)
     # `-f mp3` is explicit: ffmpeg infers the muxer from the extension, and a
     # suffix without a known format fails with "Unable to find a suitable output
@@ -161,6 +167,84 @@ def build_sanitized_audio(source_path, base_name):
 # crash mid-run cannot leave a multi-GB CFR video, CBR MP3 or recovery file
 # behind. Nothing here is cached between runs.
 _SCRATCH_FILES = []
+
+
+def scratch_path(kind, base_name, ext):
+    """A PID-tagged temp path: `temp_<kind>_<pid>_<name>.<ext>`.
+
+    The PID is not decoration. The old wrapper swept the temp dir with
+    `rm -f temp_cbr_*`, which would happily delete the live intermediate of a
+    second, concurrently running analysis. With the owner recorded in the name,
+    sweep_stale_scratch() can tell a leftover from a file still in use.
+    """
+    safe = os.path.basename(base_name).replace(os.sep, '_') or 'media'
+    return os.path.join(tempfile.gettempdir(), f'temp_{kind}_{os.getpid()}_{safe}.{ext}')
+
+
+_STALE_SCRATCH_RE = re.compile(r'^temp_(cbr|cfr|recovered)_(?:(\d+)_)?')
+_STALE_SCRATCH_MAX_AGE = 3600   # seconds; only for legacy names with no PID
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:      # someone else's live process
+        return True
+    except OSError:
+        return False
+
+
+def sweep_stale_scratch():
+    """Remove intermediates left behind by runs that died without atexit.
+
+    Non-interactive by design: the old wrapper asked "Press Enter to continue",
+    which is an infinite block in a batch or cron run. Live files (PID still
+    alive) are never touched, and legacy un-tagged names must be at least an
+    hour old before they are considered abandoned.
+    """
+    tmp = tempfile.gettempdir()
+    removed, kept = [], []
+    try:
+        names = os.listdir(tmp)
+    except OSError:
+        return
+
+    for name in names:
+        match = _STALE_SCRATCH_RE.match(name)
+        if not match:
+            continue
+        path = os.path.join(tmp, name)
+        if not os.path.isfile(path):
+            continue
+        pid = int(match.group(2)) if match.group(2) else None
+        if pid is not None and _pid_alive(pid):
+            kept.append(path)
+            continue
+        if pid is None:
+            try:
+                if (time.time() - os.path.getmtime(path)) < _STALE_SCRATCH_MAX_AGE:
+                    kept.append(path)
+                    continue
+            except OSError:
+                continue
+        try:
+            os.remove(path)
+            removed.append(path)
+        except OSError:
+            kept.append(path)
+
+    if removed:
+        print(f"\033[1;33mSwept {len(removed)} stale temp intermediate(s) from {tmp}.\033[0m")
+        for path in removed[:5]:
+            print(f"  {path}")
+        if len(removed) > 5:
+            print(f"  … and {len(removed) - 5} more")
+    if kept:
+        print(f"\033[1;33mNote: {len(kept)} temp intermediate(s) left in place "
+              f"(in use by a live run, or too recent to judge).\033[0m")
 
 
 def register_scratch(path):
@@ -178,9 +262,305 @@ def cleanup_scratch():
                 os.remove(path)
         except OSError as e:
             print(f"\033[1;33mWarning: could not remove {path}: {e}\033[0m")
+    # Reset the registry: in batch mode the next file must not re-check (and
+    # re-warn about) the files this run already deleted.
+    _SCRATCH_FILES.clear()
 
 
 atexit.register(cleanup_scratch)
+
+
+# ---------------------------------------------------------------------------
+# LOCATION ANCHORS — everything the script needs from its own repo.
+# ---------------------------------------------------------------------------
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DASHBOARD_SCRIPT = os.path.join(PROJECT_ROOT, 'scripts', 'Shapash_visualization',
+                                'launch_multi_target_dashboard.py')
+
+# Checkpoint search path, most specific first. The deleted shell wrapper
+# hard-coded four absolute paths (plus `$HOME/Downloads/...`); keeping them here
+# means the defaults follow the script instead of the launcher. Set
+# AUDIOSET_CHECKPOINT_DIRS (path-separated) on a new machine rather than editing
+# this list; --checkpoint_path always wins over everything below.
+CHECKPOINT_DIRS = [
+    PROJECT_ROOT,
+    *[d for d in os.environ.get('AUDIOSET_CHECKPOINT_DIRS', '').split(os.pathsep) if d],
+    os.path.join(os.path.expanduser('~'), 'Downloads', 'GitHub', 'audioset_tagging_cnn'),
+    '/media/zezen/HP_P7_Data/Temp/AI_models/audioset_tagging_cnn',
+    '/data/data/com.termux/files/home/storage/external_SD/LLMs/audioset_tagging_cnn',
+    '/storage/emulated/0/LLMs/audioset_tagging_cnn',
+]
+# De-duplicate while preserving priority order (PROJECT_ROOT and the ~/Downloads
+# copy are the same directory when the repo lives in its default location).
+CHECKPOINT_DIRS = list(dict.fromkeys(os.path.normpath(d) for d in CHECKPOINT_DIRS))
+
+DEFAULT_MODEL_TYPE = 'Cnn14_DecisionLevelMax'
+DEFAULT_CHECKPOINT_NAME = 'Cnn14_DecisionLevelMax_mAP=0.385.pth'
+CHECKPOINT_URL = ('https://zenodo.org/record/3987831/files/'
+                  'Cnn14_DecisionLevelMax_mAP%3D0.385.pth?download=1')
+CHECKPOINT_URL_BASE = 'https://zenodo.org/record/3987831/files/'
+
+# Extensions a folder scan will pick up. Deliberately conservative: the decoder
+# can open more than this, but a directory listing must not swallow .json/.h5
+# artifacts sitting next to the media.
+MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.mpg', '.mpeg',
+                    '.wav', '.mp3', '.flac', '.ogg', '.oga', '.opus', '.m4a', '.aac',
+                    '.wma', '.aiff', '.aif', '.mka'}
+
+
+def _checkpoints_in(directory):
+    """All .pth files in `directory` (sorted, empty list if unreadable)."""
+    try:
+        return sorted(os.path.join(directory, n) for n in os.listdir(directory)
+                      if n.lower().endswith('.pth'))
+    except OSError:
+        return []
+
+
+def resolve_checkpoint(requested, model_type=DEFAULT_MODEL_TYPE):
+    """Return a usable checkpoint path, or None (with the download hint printed).
+
+    Resolution order, and why: an explicitly requested path wins; then a
+    checkpoint whose *filename matches the requested architecture* (so
+    `--model_type Cnn14` does not silently load DecisionLevelMax weights, which
+    would fail in load_state_dict); then the exact default name; then, for the
+    default architecture only, any .pth in the search dirs.
+    """
+    if requested:
+        if os.path.isfile(requested):
+            return os.path.abspath(requested)
+        print(f"\033[1;33mWarning: requested checkpoint '{requested}' does not exist; "
+              f"searching the standard paths.\033[0m")
+
+    # `<model_type>_mAP=0.xxx.pth` or `<model_type>.pth` only: a loose
+    # startswith() would match Cnn14 -> Cnn14_DecisionLevelMax and hand a
+    # tagging request SED weights, which fails in load_state_dict.
+    arch_re = re.compile(rf'^{re.escape(model_type)}(_mAP.*)?\.pth$', re.IGNORECASE)
+    # Directory order is the priority order (project root first), so a local
+    # copy always beats a copy on a removable drive.
+    for directory in CHECKPOINT_DIRS:
+        for name in sorted(os.listdir(directory)) if os.path.isdir(directory) else []:
+            if arch_re.match(name):
+                path = os.path.join(directory, name)
+                if os.path.isfile(path):
+                    return os.path.abspath(path)
+
+    if model_type == DEFAULT_MODEL_TYPE:
+        for directory in CHECKPOINT_DIRS:
+            path = os.path.join(directory, DEFAULT_CHECKPOINT_NAME)
+            if os.path.isfile(path):
+                return os.path.abspath(path)
+        # Last resort, default architecture only: any .pth at all.
+        for directory in CHECKPOINT_DIRS:
+            for path in _checkpoints_in(directory):
+                return os.path.abspath(path)
+
+    print(f"\033[1;31mERROR: no checkpoint found for model type '{model_type}'.\033[0m")
+    print("Searched these directories:")
+    for directory in CHECKPOINT_DIRS:
+        print(f"  {directory}")
+    print()
+    print("Download the 'Cautious Listener' (SED-capable, the default) with:")
+    print(f'\033[1;32mwget -O "{os.path.join(CHECKPOINT_DIRS[0], DEFAULT_CHECKPOINT_NAME)}" '
+          f'"{CHECKPOINT_URL}"\033[0m')
+    print("Other architectures (replace <name> with e.g. Cnn14_mAP=0.431.pth):")
+    print(f"  {CHECKPOINT_URL_BASE}<name>?download=1")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# MODEL CACHE — load the weights once per process, not once per file.
+#
+# The deleted shell wrapper started a fresh Python process for every input, so a
+# folder of 200 clips paid 200 torch imports, 200 checkpoint reads and 200 CUDA
+# initialisations. Batch mode keeps one process, so the network has to survive
+# across files: keyed by everything that can change the resulting model.
+# ---------------------------------------------------------------------------
+_MODEL_CACHE = {}
+
+
+def model_cache_key(args, device):
+    return (args.model_type, args.checkpoint_path, str(device))
+
+
+def load_model_cached(args, device):
+    """Build and cache the network for this (architecture, weights, device)."""
+    key = model_cache_key(args, device)
+    if key in _MODEL_CACHE:
+        return _MODEL_CACHE[key]
+
+    Model = eval(args.model_type)
+    model = Model(sample_rate=args.sample_rate, window_size=args.window_size,
+                  hop_size=args.hop_size, mel_bins=args.mel_bins,
+                  fmin=args.fmin, fmax=args.fmax, classes_num=config.classes_num)
+    checkpoint = torch.load(args.checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model'])
+    model.to(device)
+    model.eval()
+
+    _MODEL_CACHE[key] = model
+    return model
+
+
+def collect_inputs(paths, recursive=False, extensions=None):
+    """Expand files and directories into a de-duplicated, ordered media list.
+
+    Ordering is lexical and stable so a batch is reproducible and resumable: a
+    crash halfway through leaves a deterministic "what is left" list.
+    """
+    extensions = extensions or MEDIA_EXTENSIONS
+    collected = []
+    seen = set()
+
+    def add(path):
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            collected.append(real)
+
+    for raw in paths:
+        path = os.path.abspath(os.path.expanduser(raw))
+        if os.path.isdir(path):
+            if recursive:
+                walker = ((root, name) for root, _, files in os.walk(path) for name in files)
+            else:
+                try:
+                    walker = ((path, name) for name in os.listdir(path))
+                except OSError as e:
+                    print(f"\033[1;31mERROR: cannot read '{path}': {e}\033[0m")
+                    continue
+            hits = []
+            for root, name in walker:
+                candidate = os.path.join(root, name)
+                if os.path.isfile(candidate) and os.path.splitext(name)[1].lower() in extensions:
+                    hits.append(candidate)
+            for candidate in sorted(hits):
+                add(candidate)
+        elif os.path.isfile(path):
+            add(path)
+        else:
+            print(f"\033[1;31mERROR: '{raw}' does not exist.\033[0m")
+
+    return collected
+
+
+def output_dir_for(source_media, checkpoint_path):
+    """The one place that decides where a run's artifacts live."""
+    return os.path.join(os.path.dirname(source_media),
+                        f'{get_filename(source_media)}_{os.path.basename(checkpoint_path)}'
+                        f'_audioset_tagging_cnn')
+
+
+def remove_if_empty(path):
+    """Delete a directory only if it is empty (os.rmdir refuses otherwise).
+
+    A file that dies in the probe stage has already had its output folder
+    created; leaving an empty `<name>_<ckpt>_audioset_tagging_cnn` next to a
+    corrupt input looks like a finished run with missing artifacts.
+    """
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# RUN REPORT — replaces the wrapper's `$PREFIX/bin/time -v`.
+#
+# `time` was never portable ($PREFIX is empty on desktop, so the wrapper silently
+# fell through to /bin/time) and its value was purely diagnostic. The OOM risk it
+# was guarding against is gone, so this is a summary printed at the end: wall
+# clock, CPU, and the peak RSS/swap that mattered.
+# ---------------------------------------------------------------------------
+def cpu_seconds_total():
+    """User+system CPU of this process AND its waited-for children.
+
+    ``time.process_time()`` counts the interpreter only, so every ffmpeg
+    transcode was missing from the report: a 14-file folder under-reported by
+    ~79 s (~15%) against ``time -v``, because each 3-minute CBR transcode costs
+    ~5.4 s of CPU. ``os.times()`` adds the children, which is what a user
+    comparing the two numbers expects to see.
+    """
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+def own_swap_mb():
+    """This process's swapped-out memory in MB, or None if unavailable.
+
+    Deliberately not ``psutil.swap_memory().used``: that is *system-wide* swap
+    occupancy, which grew from 677 MB to 1318 MB during a batch because of
+    other applications, while ``time -v`` correctly reported ``Swaps: 0`` for
+    this process. Reporting the system number next to our own RSS invited
+    exactly the wrong conclusion ("we swapped 1.3 GB").
+    """
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmSwap:'):
+                    return int(line.split()[1]) / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def process_uptime_seconds():
+    """Wall clock since this process was exec'd, or None if unknown.
+
+    The batch loop can only start its clock inside main(), which is already
+    after ~4 s of torch/torchaudio imports plus the CUDA probe. On a fully
+    skipped rerun that made the summary claim "wall 0.1s" while the user had
+    waited ~6 s, and it hid the 6 s gap against `time -v`.
+    """
+    try:
+        return time.time() - psutil.Process().create_time()
+    except Exception:
+        return None
+
+
+def format_usage_line(label, wall_seconds, cpu_seconds=None, uptime_seconds=None):
+    """One-line resource summary: wall clock, CPU time, peak RSS, swap.
+
+    `cpu_seconds` is a delta when reporting one file of a batch: the counters
+    are cumulative for the whole process, so a per-file figure has to be
+    measured by the caller. Peak RSS stays process-wide on purpose (it is the
+    high-water mark of the run, which is what the old `time -v` was used for).
+    """
+    parts = [f"wall {wall_seconds:.1f}s"]
+    if uptime_seconds is not None:
+        parts.append(f"since exec {uptime_seconds:.1f}s")
+
+    try:
+        parts.append(f"cpu {(cpu_seconds_total() if cpu_seconds is None else cpu_seconds):.1f}s")
+    except Exception:
+        pass
+
+    try:
+        if resource is None:
+            raise RuntimeError('resource module unavailable')
+        # ru_maxrss is KiB on Linux, bytes on macOS. Normalise to MiB.
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == 'darwin':
+            peak /= 1024 * 1024
+        else:
+            peak /= 1024
+        parts.append(f"peak RSS {peak:.0f} MB")
+    except Exception:
+        try:
+            parts.append(f"rss {psutil.Process().memory_info().rss / (1024 * 1024):.0f} MB")
+        except Exception:
+            pass
+
+    try:
+        parts.append(f"ram free {psutil.virtual_memory().available / (1024 * 1024):.0f} MB")
+    except Exception:
+        pass
+
+    swapped = own_swap_mb()
+    if swapped:
+        parts.append(f"swapped out {swapped:.0f} MB")
+
+    return f"  {label}: " + " | ".join(parts)
 
 
 def get_media_metadata(input_media_path):
@@ -343,31 +723,20 @@ def h5_has_payload(h5_path):
         return False
 
 def audio_tagging(args):
+    """Global tagging: one label vector per file. Returns 'ok'/'failed'."""
     sample_rate = args.sample_rate
-    window_size = args.window_size
-    hop_size = args.hop_size
-    mel_bins = args.mel_bins
-    fmin = args.fmin
-    fmax = args.fmax
-    model_type = args.model_type
-    checkpoint_path = args.checkpoint_path
     audio_path = args.audio_path
     device = torch.device('cuda') if args.cuda and torch.cuda.is_available() else torch.device('cpu')
 
-    classes_num = config.classes_num
     labels = config.labels
 
-    Model = eval(model_type)
-    model = Model(sample_rate=sample_rate, window_size=window_size, 
-                  hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
-                  classes_num=classes_num)
-    
     try:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model'])
+        # Same cache as the SED path: a folder tagged with --mode audio_tagging
+        # must not reload the weights for every clip either.
+        model = load_model_cached(args, device)
     except Exception as e:
         print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
-        return
+        return 'failed'
 
     if device.type == 'cuda':
         model.to(device)
@@ -391,7 +760,7 @@ def audio_tagging(args):
             batch_output_dict = model(waveform, None)
         except Exception as e:
             print(f"\033[1;31mError during model inference: {e}\033[0m")
-            return
+            return 'failed'
 
     clipwise_output = batch_output_dict['clipwise_output'].data.cpu().numpy()[0]
     sorted_indexes = np.argsort(clipwise_output)[::-1]
@@ -405,9 +774,16 @@ def audio_tagging(args):
         embedding = batch_output_dict['embedding'].data.cpu().numpy()[0]
         print('embedding: {}'.format(embedding.shape))
 
-    return clipwise_output, labels
+    return 'ok'
+
 
 def sound_event_detection(args):
+    """Run the full SED pipeline on one media file.
+
+    Returns 'ok' (artifacts written), 'skipped' (everything already existed) or
+    'failed' (a stage gave up). Batch mode uses the value to decide the exit
+    code; a single run just ignores it.
+    """
     stage('setup')
     video_fps = args.video_fps
     ui_fps = args.ui_fps  # Fixed constant for internal resolution
@@ -420,11 +796,9 @@ def sound_event_detection(args):
     
     top_k = THRESHOLDS['eventogram_top_k']  # Number of top events to track/visualize
     fig_width_px, fig_height_px, dpi = 1280, 480, 100
-    
-    mel_bins = args.mel_bins
-    fmin = args.fmin
-    fmax = args.fmax
-    model_type = args.model_type
+
+    # The network itself is built by load_model_cached(); only the weights path
+    # is needed here (it names the output folder).
     checkpoint_path = args.checkpoint_path
     
     # Path Consolidation: Clearly define the roles of each media path
@@ -440,13 +814,11 @@ def sound_event_detection(args):
     else:
         print('Using CPU.')
 
-    classes_num = config.classes_num
     labels = config.labels
-    
+
     audio_dir = os.path.dirname(source_media)
     base_name = get_filename(source_media)
-    checkpoint_name = os.path.basename(checkpoint_path)
-    output_dir = os.path.join(audio_dir, f'{base_name}_{checkpoint_name}_audioset_tagging_cnn')
+    output_dir = output_dir_for(source_media, checkpoint_path)
     create_folder(output_dir)
 
     tag_suffix = "_audioset_tagging_cnn"
@@ -463,7 +835,7 @@ def sound_event_detection(args):
     
     # Efficiently probe all metadata once
     duration, probed_video_fps, video_width, video_height, is_video, r_fps, native_sr = get_media_metadata(source_media)
-    if duration is None: return # Error already printed in probe
+    if duration is None: return 'failed'  # Error already printed in probe
 
     # Define requested video outputs
     video_outputs = []
@@ -490,7 +862,7 @@ def sound_event_detection(args):
     if skip_inference and all(os.path.exists(f) for f in expected_outputs):
         print(f"✅ Skipping {source_media}, all requested outputs already exist in: \033[1;34m{output_dir}\033[1;0m")
         print(f"To start anew, execute e.g.: \033[1;31m rm -rf \"{output_dir}\"\033[1;0m")
-        return
+        return 'skipped'
 
     # Check for sufficient disk space
     disk_usage = shutil.disk_usage(audio_dir)
@@ -500,19 +872,16 @@ def sound_event_detection(args):
     
     model = None
     if not skip_inference:
-        stage('model')
-        Model = eval(model_type)
-        model = Model(sample_rate=sample_rate, window_size=window_size, 
-                      hop_size=hop_size, mel_bins=mel_bins, fmin=fmin, fmax=fmax, 
-                      classes_num=classes_num)
-        
-        try:
-            checkpoint = torch.load(checkpoint_path, map_location=device)
-            model.load_state_dict(checkpoint['model'])
-            model.to(device)
-        except Exception as e:
-            print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
-            return
+        if model_cache_key(args, device) in _MODEL_CACHE:
+            stage_skip('model', 'reusing weights already loaded in this process')
+            model = load_model_cached(args, device)
+        else:
+            stage('model')
+            try:
+                model = load_model_cached(args, device)
+            except Exception as e:
+                print(f"\033[1;31mError loading model checkpoint: {e}\033[0m")
+                return 'failed'
     else:
         stage_skip('model', 'skipped; probabilities come from the existing HDF5')
 
@@ -541,7 +910,7 @@ def sound_event_detection(args):
     recovered_path = None
     if not duration:
         print(f"\033[1;33mWarning: Duration probe failed for {inference_media}. Attempting emergency recovery...\033[0m")
-        recovered_path = register_scratch(os.path.join(tempfile.gettempdir(), f'{base_name}_recovered.mp3'))
+        recovered_path = register_scratch(scratch_path('recovered', base_name, 'mp3'))
 
         try:
             subprocess.run(['ffmpeg', '-i', inference_media, '-y', recovered_path], check=True, capture_output=True)
@@ -550,10 +919,10 @@ def sound_event_detection(args):
             
             if duration is None or duration == 0:
                 print(f"\033[1;31mError: Could not determine duration even after recovery. Exiting.\033[0m")
-                return
+                return 'failed'
         except Exception as e:
             print(f"\033[1;31mRecovery conversion failed: {e}\033[0m")
-            return
+            return 'failed'
 
     if is_video and (video_width is None or video_height is None):
         video_width, video_height = 1280, 720
@@ -565,7 +934,7 @@ def sound_event_detection(args):
         if is_video and r_fps and probed_video_fps:
             if abs(r_fps - probed_video_fps) > 0.01:
                 print(f"\033[1;33mDetected VFR ({r_fps:.2f}/{probed_video_fps:.2f}). Re-encoding to CFR for sync...\033[0m")
-                temp_video_path = register_scratch(os.path.join(tempfile.gettempdir(), f'temp_cfr_{base_name}.mp4'))
+                temp_video_path = register_scratch(scratch_path('cfr', base_name, 'mp4'))
                 target_fps = probed_video_fps if probed_video_fps > 0 else video_fps
                 # --- FFmpeg Compatibility Note ---
                 # We use '-vsync 1' (Constant Frame Rate) instead of the newer '-fps_mode cfr'.
@@ -656,16 +1025,16 @@ def sound_event_detection(args):
         
         current_row = 0
         chunk_seconds = native_chunk_samples / native_sr
-        print(f"DEBUG: Native Chunk Samples={native_chunk_samples}, Native SR={native_sr}, Chunk Seconds={chunk_seconds}")
         for chunk_offset in range(0, int(duration), int(chunk_seconds)):
             # Use torchcodec to get samples in range
             start_s = float(chunk_offset)
             stop_s = float(chunk_offset + chunk_seconds)
             
             # get_samples_played_in_range returns [channels, samples]
+            # NB: the decoder already resamples to --sample_rate, so this is
+            # *not* native_chunk_samples worth of audio; chunk_seconds is what
+            # keeps the offset arithmetic in seconds.
             samples = decoder.get_samples_played_in_range(start_seconds=start_s, stop_seconds=stop_s).data
-            
-            print(f"DEBUG: Range [{start_s}, {stop_s}], Raw Samples Shape: {samples.shape}")
 
             # Ensure samples is [1, samples] (Mono)
             # torchcodec returns [channels, samples]. Mean over channels, then unsqueeze(0) for batch dim.
@@ -677,7 +1046,6 @@ def sound_event_detection(args):
             
             # Now [samples], need [1, samples]
             chunk_waveform = samples.unsqueeze(0).to(device)
-            print(f"DEBUG: Processed Chunk Shape: {chunk_waveform.shape}")
 
             # Step B: Inference
             with torch.no_grad():
@@ -792,7 +1160,7 @@ def sound_event_detection(args):
 
     if framewise_output.size == 0:
         print("Error: No event data detected.")
-        return
+        return 'failed'
 
     # DATA-DRIVEN DURATION: Use real data length as truth (fixes VBR/probe guesses)
     frames_num = len(framewise_output)
@@ -859,7 +1227,7 @@ def sound_event_detection(args):
         "tick_text": tick_text
     })
     plotly_js = pyo.get_plotlyjs()
-    rel_audio_path = os.path.relpath(audio_path, output_dir)
+    rel_audio_path = os.path.relpath(source_media, output_dir)
 
     # Kept out of the f-string below on purpose: JS braces would otherwise all need
     # doubling. This is a plain string, injected as a single `{hover_tooltip_js}` slot.
@@ -1205,8 +1573,15 @@ def sound_event_detection(args):
         json.dump({k: v for k, v in events_derivative.items() if v}, f, indent=2)
     print(f'Saved AI-friendly delta JSON to: \033[1;34m{json_ai_path}\033[1;0m')
 
-    stage('render')
-    if args.dynamic_eventogram or args.static_eventogram:
+    # Always show the slot (the STAGES design), but say "skipped" instead of
+    # printing a bare header for a stage that will do nothing.
+    wants_video = bool(args.dynamic_eventogram or args.static_eventogram)
+    if wants_video:
+        stage('render')
+    else:
+        stage_skip('render', 'skipped; no video requested')
+
+    if wants_video:
         print(f"🎞  Initializing video rendering pipeline ({video_fps} FPS)…")
         
         # Rendering Strategy: Dynamic (Scrolling) vs Static (Marker only)
@@ -1406,19 +1781,49 @@ def sound_event_detection(args):
     cleanup_scratch()
 
     print(f"⏲  🗃️  Analysis finished. Input duration: \033[1;34m{duration:.2f}s\033[0m")
-
-if __name__ == '__main__':
-
-
-
-    
-
+    return 'ok'
+# ===========================================================================
+# CLI & BATCH DRIVER
+#
+# This replaces audio_me.sh. The wrapper existed because the script could only
+# run from the project root (config.py used a relative metadata path) and
+# because `--cuda`, the checkpoint and the model type had to be supplied every
+# time. Both reasons are gone: config.py is anchored to its own location, and
+# the defaults below live next to the code that uses them.
+#
+# Batch mode is not a shell loop around N processes: it is one process that
+# loads the model once (see load_model_cached) and then walks the list. That is
+# the whole point — a folder of 200 clips should pay for one torch import and
+# one checkpoint read, not 200.
+# ===========================================================================
+def build_parser():
     parser = argparse.ArgumentParser(
-        description='Audio tagging and Sound event detection.',
+        description='Audio tagging and Sound event detection (PANNs).',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog=""" """
+        epilog="""Examples:
+  # one file (model/checkpoint default to the 'Cautious Listener')
+  python3 pytorch/audioset_tagging_cnn_inference_6.py recording.mp4
+
+  # a whole folder, model loaded once, sub-folders included
+  python3 pytorch/audioset_tagging_cnn_inference_6.py -d /media/recordings --recursive
+
+  # folder + eventogram videos, CPU only
+  python3 pytorch/audioset_tagging_cnn_inference_6.py -d clips --dynamic_eventogram --no_cuda
+"""
     )
-    parser.add_argument('audio_path', type=str, help='Path to the media file')
+
+    parser.add_argument('inputs', nargs='*', metavar='PATH',
+                        help='Media file(s) or folder(s) to analyse. Mixing files and '
+                             'folders is fine; duplicates are ignored.')
+    parser.add_argument('-d', '--input_dir', action='append', default=[], metavar='DIR',
+                        help='Folder of media to analyse (may be repeated). Equivalent '
+                             'to passing the folder as a positional argument.')
+    parser.add_argument('--recursive', action='store_true',
+                        help='Descend into sub-folders when scanning a folder.')
+    parser.add_argument('--ext', default=None,
+                        help='Comma-separated extension filter for folder scans, e.g. '
+                             '".mp4,.mkv". Default: all known media types.')
+
     parser.add_argument('--mode', choices=['audio_tagging', 'sound_event_detection'],
                         default='sound_event_detection', help='Select the processing mode')
     parser.add_argument('--sample_rate', type=int, default=32000)
@@ -1427,9 +1832,25 @@ if __name__ == '__main__':
     parser.add_argument('--mel_bins', type=int, default=64)
     parser.add_argument('--fmin', type=int, default=50)
     parser.add_argument('--fmax', type=int, default=14000)
-    parser.add_argument('--model_type', type=str, required=True, help='Model architecture type')
-    parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to pretrained .pth file')
-    parser.add_argument('--cuda', action='store_true', default=False, help='Use CUDA for inference')
+    parser.add_argument('--model_type', type=str, default=DEFAULT_MODEL_TYPE,
+                        help='Model architecture type.')
+    parser.add_argument('--checkpoint_path', type=str, default=None,
+                        help='Path to pretrained .pth. Default: first hit in the '
+                             'standard checkpoint search path.')
+    parser.add_argument('--cuda', dest='cuda', action='store_true', default=True,
+                        help='Use CUDA when a GPU is available (this is the default; '
+                             'the flag is kept so old command lines still work).')
+    parser.add_argument('--no_cuda', '--cpu', dest='cuda', action='store_false',
+                        help='Force CPU inference.')
+    parser.add_argument('--shapash', action='store_true',
+                        help='After a single-file run, launch the Shapash correlations '
+                             'dashboard on the resulting HDF5. Ignored in batch mode '
+                             '(it is a foreground server).')
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help='Suppress the banner and the tips.')
+    parser.add_argument('--keep_stale_temp', action='store_true',
+                        help='Do not sweep stale temp intermediates from previous runs.')
+
     parser.add_argument('--translucency', type=float, default=0.7,
                         help='Overlay translucency (0 to 1)')
     parser.add_argument('--overlay_size', type=float, default=0.2,
@@ -1456,49 +1877,46 @@ if __name__ == '__main__':
     parser.add_argument('--adaptive_lookahead', type=float, default=30.0,
                         help='Max seconds to look ahead/back for acoustic boundaries in adaptive mode')
 
-    # Heuristic to find audio_path for the help/info block
-    audio_path_hint = "[audio_path]"
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            if not arg.startswith('-'):
-                audio_path_hint = arg
-                break                        
-                        
+    return parser
+
+
+def print_banner(input_hint):
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
- 
-    print(f"Eventogrammer, version 6.14.0") 
+
+    print(f"Eventogrammer, version 6.15.0")
     print(f"Adaptation of: https://github.com/qiuqiangkong/audioset_tagging_cnn")
     print(f"Recent Material Changes:")
-    print(f"* One master grid (--ui_fps) feeds the HDF5, PNG, dashboard, CSV and JSON; the")
-    print(f"  former --log_fps duplicate stream is gone. --log_fps/--no-shapash were removed.")
+    print(f"* audio_me.sh is gone. This script is the entry point: no `cd`, no wrapper,")
+    print(f"  no hard-coded $HOME path. Defaults for model type, checkpoint and device.")
+    print(f"* Folders are first-class: -d DIR [--recursive]. The model is loaded once and")
+    print(f"  reused for every file; one file failing no longer stops the batch.")
+    print(f"* One master grid (--ui_fps) feeds the HDF5, PNG, dashboard, CSV and JSON.")
     print(f"* Significance thresholds live in one THRESHOLDS dict, injected into the dashboard")
     print(f"  so the HTML, CSV and JSON gates cannot drift apart.")
     print(f"* The sanitized CBR MP3 is written to the system temp dir and deleted after the")
     print(f"  run; a rerun that skips inference and video skips the transcode entirely.")
-    print(f"* A sound event still open at the last frame is now closed and written to the CSV")
-    print(f"  (it used to be dropped silently).")
-    print(f"* Dashboard hover is a compact top-N tooltip, strongest first; the native unified")
-    print(f"  legend was clipped on long vocabularies and showed only the least probable tail.")
     print(f"* Pipeline stages are named (see STAGES) and logged as [n/N] banners.")
     print()
 
-    print(f"Note on the models:")   
+    print(f"Note on the models:")
     print(f"* Cnn14_DecisionLevelMax (Sound Event Detection): Uses Decision-level pooling to maintain")
     print(f"  time resolution. Essential for generating Eventograms and high-res HDF5 logs.")
-    print(f"* Other models: Best for global audio tagging (use the '--audio_tagging' mode).")
+    print(f"* Other models: Best for global audio tagging (use the '--mode audio_tagging').")
     print()
 
-    print(f"Performance & Stability:") 
-    print(f"* Processing ratio: ~15s audio per 1s CPU time (300 GFLOPs, 4-core, no viz).") 
-    print(f"* Platform Gap: works ~1.7x faster in Prooted Debian than in Termux (Eigen BLAS).")  
-    print(f"* OOM Safety: Close browsers or restart whole phone if crashes occur in Termux.")  
+    print(f"Performance & Stability:")
+    print(f"* Processing ratio: ~15s audio per 1s CPU time for long files with no viz;")
+    print(f"  short tracks with every artifact (PNG+HTML+CSV+JSON) land near 5s per 1s CPU,")
+    print(f"  because the per-file CBR transcode (~5s CPU) then dominates.")
+    print(f"* Platform Gap: works ~1.7x faster in Prooted Debian than in Termux (Eigen BLAS).")
+    print(f"* Batch runs report wall clock, CPU and peak RSS per file at the end.")
     print()
 
-    print(f"Split Suggestion:") 
-    print(f"If the file is too long, use FFmpeg to segment it first:") 
+    print(f"Split Suggestion:")
+    print(f"If the file is too long, use FFmpeg to segment it first:")
     print(f"mkdir split_input_media && cd split_input_media && \\")
-    print(f"ffmpeg -i {audio_path_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
-    print(f"time bash -c 'for file in *; do bash audio_me.sh \"$file\" --dynamic_eventogram; done'")
+    print(f"ffmpeg -i {input_hint} -c copy -f segment -segment_time 1200 output_%03d.mp4")
+    print(f"python3 pytorch/audioset_tagging_cnn_inference_6.py -d split_input_media --dynamic_eventogram")
     print()
 
     print("Tips & Environment Hacks:")
@@ -1514,9 +1932,7 @@ if __name__ == '__main__':
     print(f"  Edit: /data/data/com.termux/files/usr/lib/python{py_ver}/site-packages/torchaudio/_internally_replaced_utils.py")
     print("  Change 'if sys.platform == \"linux\":' to 'if sys.platform == \"android\":'")
     print("* If some coverage numba error: do 'apt remove python3-coverage'. Be careful with the below python modules if they have parallel apt based install versions, use one or the other then: 'python -m pip install torch torchaudio torchcodec --upgrade --extra-index-url https://download.pytorch.org/whl/cpu ' : do check these against their apt versions. For anything torch or torchcodec related: sudo apt install libpython3.* to avoid .so file linkage problems")
-    
-    print("* If: 'LibsndfileError: File contains data in an unimplemented format', then 'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")  
-
+    print("* If: 'LibsndfileError: File contains data in an unimplemented format', then 'git clone https://github.com/libsndfile/libsndfile.git' and install it in e.g. Termux. Or run in Proot.")
     print()
 
     print(f"Dependency Versions:")
@@ -1524,22 +1940,156 @@ if __name__ == '__main__':
     print(f"Torchaudio: {torchaudio.__version__ if torchaudio else 'Not Available'}")
     # Often errors, unless  sudo apt install libpython3.* to avoid .so file linkage problems:
     print(f"Torchcodec: {getattr(torchcodec, '__version__', 'Unknown') if torchcodec else 'Error checking version, so do read the tips above!'}")
- 
     print()
 
-    if len(sys.argv) == 1:
+
+def launch_shapash(h5_path):
+    """Run the correlations dashboard on one HDF5 (blocking, foreground server)."""
+    if not os.path.exists(h5_path):
+        print(f"\033[1;33mNo HDF5 at {h5_path}; nothing for Shapash to explain.\033[0m")
+        return
+    if not os.path.exists(DASHBOARD_SCRIPT):
+        print(f"\033[1;31mDashboard launcher not found: {DASHBOARD_SCRIPT}\033[0m")
+        return
+    print()
+    print("📊  Launching Unified Shapash Dashboard...")
+    print("Note: This dashboard explains the Top 50 sounds detected.")
+    subprocess.run([sys.executable, DASHBOARD_SCRIPT, h5_path])
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.inputs and not args.input_dir:
+        print_banner('[PATH]')
         parser.print_help()
-        sys.exit(1)
+        return 2
 
-    args = parser.parse_args()
-    audio_path = args.audio_path
+    # Resolve the checkpoint before doing anything expensive, and echo the choice:
+    # a batch must never silently run on the wrong weights.
+    checkpoint = resolve_checkpoint(args.checkpoint_path, args.model_type)
+    if checkpoint is None:
+        return 1
+    if args.checkpoint_path and os.path.abspath(args.checkpoint_path) != checkpoint:
+        print(f"\033[1;33mUsing {checkpoint}\033[0m")
+    args.checkpoint_path = checkpoint
 
+    extensions = None
+    if args.ext:
+        extensions = {e if e.startswith('.') else f'.{e}'
+                      for e in re.split(r'[,\s]+', args.ext.strip()) if e}
 
-    if args.mode == 'audio_tagging':
-        audio_tagging(args)
-    else:
-        sound_event_detection(args)
+    files = collect_inputs(list(args.inputs) + list(args.input_dir),
+                           recursive=args.recursive, extensions=extensions)
+    if not files:
+        print("\033[1;31mERROR: no media files found in the given input(s).\033[0m")
+        return 1
 
- 
+    if not args.quiet:
+        print_banner(files[0] if len(files) == 1 else 'INPUT')
+
+    # Global tagging and SED weights are not interchangeable: the DecisionLevel
+    # models need the extra decision-level input, so tagging with them dies in a
+    # padding error. Say so up front instead of letting the model raise.
+    if args.mode == 'audio_tagging' and 'DecisionLevel' in args.model_type:
+        print(f"\033[1;33mNote: --mode audio_tagging works best with a global tagging "
+              f"model (e.g. --model_type Cnn14); '{args.model_type}' is an SED model.\033[0m")
+        print()
+
+    if not args.keep_stale_temp:
+        sweep_stale_scratch()
+
+    gpu_available = torch.cuda.is_available()
+    device = 'cuda' if (args.cuda and gpu_available) else 'cpu'
+    device_note = ''
+    if not args.cuda:
+        device_note = '  (forced with --no_cuda)'
+    elif not gpu_available:
+        device_note = '  (no CUDA device detected)'
+    print(f"Model Type: {args.model_type}")
+    print(f"Checkpoint: {args.checkpoint_path}")
+    print(f"Device: {device}{device_note}")
+    if len(files) > 1:
+        print(f"Batch: {len(files)} file(s); the model is loaded once and reused.")
     print()
 
+    batch_start = time.time()
+    results = []
+    interrupted = False
+
+    for index, media in enumerate(files, 1):
+        if len(files) > 1:
+            print(f"\033[1;35m{'=' * 72}\n[{index}/{len(files)}] {media}\n{'=' * 72}\033[0m")
+
+        args.audio_path = media
+        started = time.time()
+        cpu_started = cpu_seconds_total()
+        try:
+            if args.mode == 'audio_tagging':
+                status = audio_tagging(args) or 'ok'
+            else:
+                status = sound_event_detection(args) or 'ok'
+        except KeyboardInterrupt:
+            print("\n\033[1;33mInterrupted by user; stopping the batch.\033[0m")
+            results.append((media, 'interrupted', time.time() - started))
+            interrupted = True
+            break
+        except Exception:
+            print(f"\033[1;31mUnhandled error on {os.path.basename(media)}; "
+                  f"continuing with the next file.\033[0m")
+            traceback.print_exc()
+            status = 'failed'
+        finally:
+            # Per-file, not per-process: the intermediates of file N must not
+            # survive into file N+1, and a crash must not leave them on disk.
+            cleanup_scratch()
+            plt.close('all')
+            gc.collect()
+
+        if status == 'failed':
+            remove_if_empty(output_dir_for(media, args.checkpoint_path))
+
+        elapsed = time.time() - started
+        cpu_elapsed = cpu_seconds_total() - cpu_started
+        results.append((media, status, elapsed))
+        if len(files) > 1:
+            print(format_usage_line(os.path.basename(media), elapsed, cpu_elapsed))
+
+    if args.shapash:
+        if len(files) > 1:
+            print("\033[1;33m--shapash is a foreground dashboard server; ignored for a "
+                  "batch. Run it on one file, or open interactive_dashboard.html.\033[0m")
+        else:
+            launch_shapash(os.path.join(output_dir_for(files[0], args.checkpoint_path),
+                                        'full_event_log.h5'))
+
+    total_wall = time.time() - batch_start
+
+    if len(files) > 1:
+        counts = collections.Counter(status for _, status, _ in results)
+        print()
+        print('=' * 72)
+        print(f"BATCH SUMMARY — {len(files)} file(s)")
+        for status in ('ok', 'skipped', 'failed', 'interrupted'):
+            if counts.get(status):
+                print(f"  {status:<12}{counts[status]}")
+        print()
+        marks = {'ok': '✓', 'skipped': '⏭', 'failed': '✗', 'interrupted': '⏸'}
+        for media, status, elapsed in results:
+            print(f"  {marks.get(status, '?')} {status:<11}{elapsed:8.1f}s  {media}")
+        not_attempted = len(files) - len(results)
+        if not_attempted:
+            print(f"  … {not_attempted} file(s) not attempted")
+        print('=' * 72)
+
+    print(format_usage_line('Total', total_wall, uptime_seconds=process_uptime_seconds()))
+    print()
+
+    if interrupted:
+        return 130
+    return 1 if any(status == 'failed' for _, status, _ in results) else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -62,10 +62,40 @@ CUDA_VISIBLE_DEVICES=0 python3 pytorch/inference.py audio_tagging \
 
 The codebase has been upgraded for efficiency and interactive analysis, particularly for long-form recordings and iterative exploration.
 
-### 1. High-Performance Inference (`audio_me.sh`)
-The `audio_me.sh` script is the primary entry point for Sound Event Detection. It uses a **"Smart Skip" (Idempotent)** strategy:
+### 1. High-Performance Inference (single entry point)
+`pytorch/audioset_tagging_cnn_inference_6.py` *is* the entry point — there is no shell wrapper and no `cd` requirement. The script anchors its own resources (labels CSV, docs template, dashboard launcher) to its location, so it runs from any working directory and from any clone.
+
+Model type, checkpoint and device all have defaults, so the short form is just:
+
+```bash
+python3 pytorch/audioset_tagging_cnn_inference_6.py path/to/recording.mp4
+```
+
+It uses a **"Smart Skip" (Idempotent)** strategy:
 - **Phase 1: Inference Check.** If the output directory and every artifact the run would produce (`full_event_log.h5`, `eventogram.png`, `interactive_dashboard.html`, `summary_events.csv`, the delta JSON, plus any requested eventogram video) already exist, the script skips the heavy neural network processing entirely, saving significant time and CPU/Battery. If the HDF5 exists but any of the derived artifacts is missing, inference is skipped and only that artifact is rebuilt.
-- **Phase 2: Optional Dashboard.** Adding `--shapash` to `audio_me.sh` launches the **Shapash Correlations Dashboard** after inference. Without the flag nothing is launched — the Plotly `interactive_dashboard.html` is the always-on dashboard.
+- **Phase 2: Optional Dashboard.** Adding `--shapash` launches the **Shapash Correlations Dashboard** after a single-file run. Without the flag nothing is launched — the Plotly `interactive_dashboard.html` is the always-on dashboard.
+
+**Folders are first-class.** Pass a directory (or `-d DIR`) and the script loads the model **once**, then runs every media file in it:
+
+```bash
+# every media file in a folder, sub-folders included
+python3 pytorch/audioset_tagging_cnn_inference_6.py -d /media/recordings --recursive
+
+# filter by extension, add eventogram videos
+python3 pytorch/audioset_tagging_cnn_inference_6.py -d clips --ext .mp4,.mkv --dynamic_eventogram
+```
+
+A batch prints one line per file and a summary table at the end (status, wall clock, CPU, peak RSS), and exits non-zero if any file failed. One unreadable file no longer aborts the run: it is reported and the batch continues. Because the heavy stages are idempotent, re-running the same folder is nearly free for the files already finished — a good way to resume an interrupted batch.
+
+**Defaults and flags worth knowing:**
+
+| Flag | Effect |
+| --- | --- |
+| `--no_cuda` / `--cpu` | Force CPU. GPU is used automatically when present. |
+| `--model_type` | Defaults to `Cnn14_DecisionLevelMax` (the SED-capable "Cautious Listener"). |
+| `--checkpoint_path` | Optional; the first checkpoint found in the standard search path is used, and the choice is echoed. |
+| `--recursive`, `--ext` | Folder scan depth and extension filter. |
+| `--keep_stale_temp` | Skip the automatic sweep of temp intermediates left by crashed runs. |
 
 ### 2. Shapash "Acoustic Brain" Persistence
 The dashboard launcher (`scripts/Shapash_visualization/launch_correlations_dashboard.py`) is now momentum-aware:
@@ -75,12 +105,12 @@ The dashboard launcher (`scripts/Shapash_visualization/launch_correlations_dashb
 
 ### 3. Usage Example (The "Daily Driver")
 ```bash
-# Analyze a recording and launch the dashboard
-bash audio_me.sh path/to/recording.mp4
+# Analyse a recording and launch the Shapash dashboard afterwards
+python3 pytorch/audioset_tagging_cnn_inference_6.py path/to/recording.mp4 --shapash
 
 # Re-run the same command later
-# (Instantly re-opens the dashboard without retraining)
-bash audio_me.sh path/to/recording.mp4
+# (Artifacts are complete, so inference is skipped and the dashboard opens instantly)
+python3 pytorch/audioset_tagging_cnn_inference_6.py path/to/recording.mp4 --shapash
 ```
 
 ## Sound event detection using pretrained models

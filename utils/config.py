@@ -1,11 +1,19 @@
 import numpy as np
 import csv
+import os
 
 sample_rate = 32000
 clip_samples = sample_rate * 10     # Audio clips are 10-second
 
+# Anchor the label table to this file, not to the caller's CWD. The relative
+# path ('metadata/class_labels_indices.csv') only worked when the process
+# happened to start in the project root, which is why the old audio_me.sh
+# wrapper had to `cd` there first. Now `import config` works from any
+# directory, which is what makes the script portable (and batch-safe).
+_METADATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'metadata')
+
 # Load label
-with open('metadata/class_labels_indices.csv', 'r') as f:
+with open(os.path.join(_METADATA_DIR, 'class_labels_indices.csv'), 'r') as f:
     reader = csv.reader(f, delimiter=',')
     lines = list(reader)
 

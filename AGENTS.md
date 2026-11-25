@@ -25,7 +25,7 @@ The script operates in a single mode: `sound_event_detection`. The process is as
 
 ### Step 1: Initialization and Media Inspection
 
-1. **Argument Parsing:** The script takes several command-line arguments, with `audio_path`, `model_type`, and `checkpoint_path` being mandatory.
+1. **Argument Parsing:** The script accepts one or more paths (files and/or folders via `-d`). Only the input path is required: `--model_type` defaults to `Cnn14_DecisionLevelMax`, `--checkpoint_path` is resolved from `CHECKPOINT_DIRS` (echoed so the choice is visible), and CUDA is used automatically when present (`--no_cuda` forces CPU). `main()` expands folders with `collect_inputs()` and runs the pipeline once per file with a single model load.
 2. **Device Selection:** It automatically selects a CUDA device if available, otherwise falls back to CPU.
 3. **Output Directory:** It creates a unique output directory named after the input file (e.g., `my_video.mp4_audioset_tagging_cnn/`).
 4. **Media Probing (`get_media_metadata`):** It uses `ffprobe` to extract critical metadata from the input file, including duration, FPS, and resolution. This information is vital for the subsequent visualization steps.
@@ -140,7 +140,7 @@ By analyzing the **Deltas** (Attack/Decay) and **Skips** (Steady state), an AI o
 
 ## 6. Key Technical Details
 
-- **Execution Context:** The script MUST be run from the project's root directory, as it relies on relative paths to load configuration files (e.g., `config.py` which points to the class labels CSV).
+- **Execution Context:** No `cd` and no shell wrapper. `utils/config.py` anchors `metadata/class_labels_indices.csv` to its own location, and the inference script anchors the dashboard launcher and the docs template to `PROJECT_ROOT`, so it can be invoked from any working directory and from any clone. (The deleted `audio_me.sh` existed only to `cd` there and to supply `--cuda`/model/checkpoint defaults; those defaults now live in `build_parser()`.)
 - **Eventogram X-Axis Alignment:** The alignment of the animated marker with the static eventogram image is achieved by dynamically calculating the plot's left margin based on the pixel width of the y-axis labels, and then using those same fractional coordinates to guide the marker's animation. This ensures perfect synchronization.
 - **Memory Management:** The use of 3-minute chunks for inference is a key feature that allows the script to process very large files without consuming excessive RAM.
 - **Auto-Sanitization:** The script includes a "Sanitary Gate" that automatically uses FFmpeg to transcode corrupt audio streams (e.g., missing MPEG headers) into clean PCM format before loading.
@@ -148,18 +148,20 @@ By analyzing the **Deltas** (Attack/Decay) and **Skips** (Steady state), an AI o
 ## 7. Usage Example
 
 ```bash
-# Ensure you are in the root directory of the audioset_tagging_cnn project
+# Minimal: model type, checkpoint and device are resolved automatically
+python3 pytorch/audioset_tagging_cnn_inference_6.py /path/to/your/video.mp4
 
-MODEL_TYPE="Cnn14_DecisionLevelMax"
-CHECKPOINT_PATH="/path/to/Cnn14_DecisionLevelMax_mAP=0.385.pth"
-INPUT_VIDEO="/path/to/your/video.mp4"
+# Explicit, and with an eventogram video
+python3 pytorch/audioset_tagging_cnn_inference_6.py /path/to/your/video.mp4 \
+    --model_type=Cnn14_DecisionLevelMax \
+    --checkpoint_path=/path/to/Cnn14_DecisionLevelMax_mAP=0.385.pth \
+    --dynamic_eventogram
 
-python3 pytorch/audioset_tagging_cnn_inference_6.py \
-    "$INPUT_VIDEO" \
-    --model_type="$MODEL_TYPE" \
-    --checkpoint_path="$CHECKPOINT_PATH" \
-    --cuda
+# A whole folder: the model is loaded once, then reused for every file
+python3 pytorch/audioset_tagging_cnn_inference_6.py -d /path/to/folder --recursive
 ```
+
+Batch notes: inputs may be files, folders, or both (`-d` is repeated freely); duplicates are dropped; ordering is lexical and stable, so an interrupted batch is resumable thanks to the idempotency stage. Per-file failures are caught and reported instead of aborting the run, and the process exits non-zero if any file failed. `--shapash` is ignored for multi-file runs because it is a foreground server.
 
 ### Quick Reference Table for Your Files
 
@@ -336,7 +338,7 @@ The current script "over-samples the canvas"—feeding 180,000 data points into 
 
 Contrary to standard research scripts, running `pytorch/audioset_tagging_cnn_inference_6.py` (v6.13.x) on full tracks is **not "scary"** for system resources or terminal context. 
 
-- **Terminal Hygiene:** The script is engineered to output only concise high-level progress and info messages (e.g., "Chunk at Xm finished"). 
+- **Terminal Hygiene:** The script is engineered to output only concise high-level progress and info messages (e.g., "Chunk at Xm finished"). The three per-chunk `DEBUG:` prints that had survived from development (`Native Chunk Samples`, `Range … Raw Samples Shape`, `Processed Chunk Shape`) were removed in November 2026 for exactly this reason: they doubled the log volume of a batch for information that is derivable, so a 41-minute folder produced 28 lines of shapes that no reader needed.
 - **Data Redirection:** All massive probability matrices and frame-wise logs are redirected directly to disk (`full_event_log.h5`). 
 - **CLI Compatibility:** The Gemini CLI environment safely handles any unexpected long printouts by redirecting them to temporary files, ensuring your active context window remains clean for analytical reasoning.
 
@@ -365,6 +367,28 @@ While PANNs excel at identifying the **"Physical Reality"** (e.g., specific inst
 - **Interactive Dashboard Enhancements:** Added "The Acoustic Explorer" functionality. Integrated HTML5 `<video>` player, CSS fixes for full width, and JavaScript for click-to-seek functionality from the Plotly graph.
 - **Documentation:** Updated `docs/auditory_cognition_guide_template.md` to reflect HDF5-based data storage and updated the CLI commands.
 - **Diagnostic Resolution:** Fixed `BrokenPipeError` issues by refining the sanitization process and resolving script-level import conflicts (`UnboundLocalError`).
+
+### November 2026 — `audio_me.sh` removed; the script is the entry point
+
+- **Portability:** `utils/config.py` now anchors `metadata/class_labels_indices.csv` to `__file__` instead of the CWD. That relative path was the only reason the deleted wrapper had to `cd "$HOME/Downloads/GitHub/audioset_tagging_cnn"` — a hard-coded, single-machine path that also fed the `python` invocation, so the script could not run from another clone or user.
+- **Defaults moved into `build_parser()`:** `--model_type` defaults to `Cnn14_DecisionLevelMax`; `--checkpoint_path` is optional and resolved by `resolve_checkpoint()` against `DEFAULT_CHECKPOINTS` (the chosen path is echoed, so a batch never silently runs on the wrong weights); GPU is used automatically when present (`--no_cuda`/`--cpu` to force CPU); `--shapash` is a real flag (`launch_shapash()`) instead of an invisible launcher-only trap.
+- **Batch mode (`-d/--input_dir`, `--recursive`, `--ext`, plus positional paths):** `collect_inputs()` expands and de-duplicates, sorting lexically for a reproducible, resumable order. The model is loaded **once** per process and reused across files by `load_model_cached()` (keyed by architecture, weights and device), instead of one process, one torch import and one checkpoint read per file. `sound_event_detection()` now returns `'ok'`/`'skipped'`/`'failed'`; per-file exceptions are caught, the batch continues, `cleanup_scratch()` + `plt.close('all')` + `gc.collect()` run between files, an empty output folder left by a failed probe is removed, and the exit code is non-zero if any file failed (130 if interrupted).
+- **Temp scratch is PID-tagged:** `scratch_path()` writes `temp_<kind>_<pid>_<name>.<ext>`, and `sweep_stale_scratch()` deletes only leftovers whose owner PID is gone (legacy un-tagged names must be over an hour old). The wrapper's `rm -f "$TMPDIR"/temp_cbr_*` would delete the live intermediate of a concurrently running analysis, and its `read -p "Press Enter"` prompt blocked batch and cron runs forever.
+- **Resource report:** `format_usage_line()` replaces `$PREFIX/bin/time -v` (which silently fell back to `/bin/time` on desktop, since `$PREFIX` is Termux-only). It prints wall clock, CPU, peak RSS (`resource.getrusage`) and swap per file plus a total, which is all the old OOM-watch flag was ever used for.
+- **Latent bug fixed:** the dashboard's `<video src=...>` used `audio_path`, a *global* that only existed because `__main__` assigned it. In batch mode that global would have pointed at the last file for every dashboard. It now uses the per-run `source_media`.
+- **Measured effect of the cache** (4-thread CPU host, 7 s clip): first file 13.1 s, second file 1.5 s — the reuse path skips the ~11.6 s model-load stage. Verified on a mixed `.wav` + `.mp3` folder run from `/tmp` (i.e. not the project root).
+
+### November 2026 — Run report reconciled against `time -v`
+
+A 14-file, 41.4-minute batch (`.webm`/`.mkv`, 48 kHz sources, dashboard + PNG + CSV + JSON, no video) was timed externally with `time -v`. Three defects in the new report surfaced, all now fixed:
+
+- **CPU excluded children.** `time.process_time()` counts the interpreter only, so the report said `cpu 461.9s` where `time -v` measured `491.4 user + 49.2 sys = 540.6s`. The 78.7 s gap was almost exactly the CBR transcodes (measured 5.4 s of CPU per 3-minute file × 14). `cpu_seconds_total()` now sums `os.times()` including `children_*`; the same run reports `80.3s` vs `time`'s `81.3s` (was 15 % low, now <1 %).
+- **Swap was system-wide.** `psutil.swap_memory().used` grew from 677 MB to 1318 MB during the batch because of *other* applications, while `time -v` correctly said `Swaps: 0`. `own_swap_mb()` reads `VmSwap` from `/proc/self/status` and the field is omitted when zero, so "we swapped 1.3 GB" can no longer be misread from the log.
+- **Startup was invisible.** The batch clock starts in `main()`, after ~4 s of torch/torchaudio imports and the CUDA probe, so a fully skipped rerun printed `wall 0.1s` for a 6 s wait. The `Total` line now adds `since exec`, which tracks `time`'s `Elapsed` to within 0.1 s.
+
+Peak RSS reproduced `time`'s `Maximum resident set size` to the kilobyte throughout (2036 MB vs 2035.6 MB; 1908 MB vs 1907.8 MB), so `resource.getrusage` was already the right source. Throughput on this batch: 41.4 min of audio in 207.7 s of loop time (≈12× realtime, 2.6 CPU-seconds per audio-second including ffmpeg).
+
+Also removed in the same pass: three `DEBUG:` prints per chunk (`Native Chunk Samples`, `Range … Raw Samples Shape`, `Processed Chunk Shape`) that contradicted the terminal-hygiene rule in §13, and the bare `[13/13] Video Rendering` header that printed even when no video was requested (it now reads `— skipped; no video requested`).
 
 ## 15. Forensic Temporal Resolution & The "Resolution Bottleneck" (GIGO Warning)
 
